@@ -262,10 +262,11 @@ def cmd_floor(args: argparse.Namespace) -> int:
 def cmd_corpus(args: argparse.Namespace) -> int:
     qs = tuple(args.q)
     geometry_checks = not args.no_geometry
+    kinds = ("volume", "model") if args.kind == "any" else (args.kind,)
 
     if args.dry_run:
         plan = report.plan_corpus(
-            args.samples, geometry_checks=geometry_checks, n_chunks=args.chunks
+            args.samples, geometry_checks=geometry_checks, kinds=kinds, n_chunks=args.chunks
         )
         _print_plan(plan)
         _say("dry run: nothing was requested.")
@@ -281,11 +282,14 @@ def cmd_corpus(args: argparse.Namespace) -> int:
     for p in preds:
         by_segment.setdefault((p.sample, p.segment), []).append(p)
     segments = [seg for seg, group in sorted(by_segment.items())
-                if any(pair.kind == "volume" for pair in census.pairs(group))]
+                if any(pair.kind in kinds for pair in census.pairs(group))]
     if args.limit:
         segments = segments[: args.limit]
     if not segments:
-        _say("no segment has two derivations of the same scan: there is no floor to measure.")
+        if args.kind == "volume":
+            _say("no segment has two derivations of the same scan: there is no floor to measure.")
+        else:
+            _say(f"no segment carries a pair of kind {args.kind}: nothing to measure.")
         return EXIT_OK
 
     plan = report.plan_corpus(
@@ -293,6 +297,7 @@ def cmd_corpus(args: argparse.Namespace) -> int:
         preds=preds,
         segments=segments,
         geometry_checks=geometry_checks,
+        kinds=kinds,
         n_chunks=args.chunks,
     )
     _print_plan(plan)
@@ -316,6 +321,7 @@ def cmd_corpus(args: argparse.Namespace) -> int:
         preds=preds,
         segments=segments,
         geometry_checks=geometry_checks,
+        kinds=kinds,
         on_segment=on_segment,
         on_error=on_error,
     )
@@ -385,11 +391,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_flags(p_floor)
     p_floor.set_defaults(func=cmd_floor)
 
-    p_corpus = sub.add_parser("corpus", help="the floor of every segment that has one")
+    p_corpus = sub.add_parser("corpus", help="the floor, or the anchor, of every segment that has one")
     p_corpus.add_argument("--samples", nargs="+", metavar="SAMPLE",
                           help="limit to these samples")
     p_corpus.add_argument("--limit", type=int, metavar="N",
                           help="stop after N segments, in listing order")
+    p_corpus.add_argument("--kind", choices=("volume", "model", "any"), default="volume",
+                          help="which pair makes a segment worth measuring: 'volume' is the "
+                               "floor and exists on one segment today, 'model' is the anchor "
+                               "and exists on many, 'any' takes both (default: volume)")
     _add_common(p_corpus)
     _add_run_flags(p_corpus)
     p_corpus.set_defaults(func=cmd_corpus)

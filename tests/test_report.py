@@ -34,6 +34,7 @@ class FakePrediction:
     tile: int | None = 64
     stride: int | None = 16
     size_bytes: int = 42 * 1024 * 1024
+    level: int | None = None
 
 
 @dataclass(frozen=True)
@@ -973,3 +974,91 @@ def test_number_coercion_rejects_what_json_cannot_carry():
     assert report._f(float("nan")) is None
     assert report._f("not a number") is None
     assert report._i(None) is None
+
+
+# --------------------------------------------------------------------------- corpus kinds
+
+
+def pred_in(segment: str, volume: str, model: str) -> FakePrediction:
+    """Like `pred`, but on a named segment, so a corpus can hold more than one."""
+    return FakePrediction(
+        key=f"PHerc0172/segments/{segment}/ink-detection/PHerc0172-x-volume-{volume}-{model}.tif",
+        sample="PHerc0172",
+        segment=segment,
+        volume=volume,
+        model=model,
+    )
+
+
+def _corpus_of_two() -> list[FakePrediction]:
+    """One segment with only a volume pair, one with only a model pair."""
+    return [
+        pred_in("seg-floor", VOL_A, MODEL_1),
+        pred_in("seg-floor", VOL_B, MODEL_1),
+        pred_in("seg-anchor", VOL_A, MODEL_1),
+        pred_in("seg-anchor", VOL_A, MODEL_2),
+    ]
+
+
+def _segments_selected(monkeypatch, kinds) -> list[str]:
+    """Which segments corpus_floor decides to measure, without measuring them."""
+    from inkfloor import report as report_mod
+
+    asked: list[str] = []
+
+    def fake_floor_for_segment(sample, segment, *a, **kw):
+        asked.append(segment)
+        return report_mod.SegmentFloor(
+            sample=sample, segment=segment, volume_pairs=[], model_pairs=[],
+            mesh=None, intensity=None, nulls={},
+        )
+
+    monkeypatch.setattr(report_mod, "floor_for_segment", fake_floor_for_segment)
+    report_mod.corpus_floor(preds=_corpus_of_two(), kinds=kinds)
+    return asked
+
+
+def test_corpus_kinds_volume_takes_only_the_floor_segment(monkeypatch):
+    assert _segments_selected(monkeypatch, ("volume",)) == ["seg-floor"]
+
+
+def test_corpus_kinds_model_takes_only_the_anchor_segment(monkeypatch):
+    assert _segments_selected(monkeypatch, ("model",)) == ["seg-anchor"]
+
+
+def test_corpus_kinds_both_takes_both(monkeypatch):
+    assert sorted(_segments_selected(monkeypatch, ("volume", "model"))) == [
+        "seg-anchor", "seg-floor",
+    ]
+
+
+def test_corpus_kinds_defaults_to_the_floor(monkeypatch):
+    """The default must not change under anyone who was calling this before --kind existed."""
+    assert _segments_selected(monkeypatch, ("volume",)) == _segments_selected(
+        monkeypatch, ("volume",)
+    )
+    from inkfloor import report as report_mod
+
+    asked: list[str] = []
+    monkeypatch.setattr(
+        report_mod, "floor_for_segment",
+        lambda sample, segment, *a, **kw: (
+            asked.append(segment),
+            report_mod.SegmentFloor(
+                sample=sample, segment=segment, volume_pairs=[], model_pairs=[],
+                mesh=None, intensity=None, nulls={},
+            ),
+        )[1],
+    )
+    report_mod.corpus_floor(preds=_corpus_of_two())
+    assert asked == ["seg-floor"]
+
+
+def test_plan_corpus_names_the_pair_it_will_fetch():
+    """The plan must not say 'volume pair' when it is about to fetch model pairs."""
+    from inkfloor import report as report_mod
+
+    vol = " ".join(report_mod.plan_corpus(kinds=("volume",)).notes)
+    mod = " ".join(report_mod.plan_corpus(kinds=("model",)).notes)
+    assert "volume pair" in vol and "model pair" not in vol
+    assert "model pair" in mod and "volume pair" not in mod

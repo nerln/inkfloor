@@ -355,12 +355,23 @@ def plan_segment(
     return plan
 
 
+def _kind_phrase(kinds: Sequence[str]) -> str:
+    """How to name the pair a segment must carry, in a sentence about downloads."""
+    wanted = frozenset(kinds)
+    if wanted == {"volume"}:
+        return "volume pair (two derivations of one scan)"
+    if wanted == {"model"}:
+        return "model pair (two checkpoints on one derivation)"
+    return "comparable pair"
+
+
 def plan_corpus(
     samples: Sequence[str] | None = None,
     *,
     preds: Sequence[Prediction] | None = None,
     segments: Sequence[tuple[str, str]] | None = None,
     geometry_checks: bool = True,
+    kinds: Sequence[str] = ("volume",),
     n_chunks: int = 5,
 ) -> DownloadPlan:
     """The plan for a corpus run. `segments` restricts it to the segments actually kept."""
@@ -386,8 +397,8 @@ def plan_corpus(
         )
         plan.notes.append(
             "Offline plan: the number of predictions is only known after the listing. Only "
-            "segments that carry a volume pair are fetched, so the total follows how many "
-            "pairs of derivations are published. At "
+            f"segments that carry a {_kind_phrase(kinds)} are fetched, so the total follows "
+            "how many such pairs are published. At "
             f"{human_bytes(NOMINAL_PREDICTION_BYTES)} each, 100 predictions are "
             f"{human_bytes(100 * NOMINAL_PREDICTION_BYTES)} and 500 are "
             f"{human_bytes(500 * NOMINAL_PREDICTION_BYTES)}."
@@ -685,17 +696,26 @@ def corpus_floor(
     preds: Sequence[Prediction] | None = None,
     segments: Sequence[tuple[str, str]] | None = None,
     geometry_checks: bool = True,
+    kinds: Sequence[str] = ("volume",),
     on_segment: Callable[[int, int, str, str], None] | None = None,
     on_error: Callable[[str, str, Exception], None] | None = None,
 ) -> list[SegmentFloor]:
-    """Measure every segment that has at least one volume pair.
+    """Measure every segment that carries at least one pair of a kind in `kinds`.
 
     Does not print progress: pass `on_segment` / `on_error` if you want to see it. Without
     `on_error` a failing segment aborts the run; with it, the segment is skipped and the
-    caller decides what to say. A segment without a volume pair is not measured at all:
-    there is no floor to measure there.
+    caller decides what to say.
+
+    `kinds` defaults to the floor alone, which is one segment in the corpus published today.
+    Pass `("model",)` for the anchor instead: how far apart two checkpoints land on the same
+    derivation. That is the scale the floor has to be read against, and it exists on far more
+    segments, so it is the only way to say whether one floor is large without leaning on n=1.
+    Every measured segment still reports both its volume and its model pairs; `kinds` only
+    decides which segments are worth downloading.
     """
     from inkfloor import census as census_mod
+
+    wanted_kinds = frozenset(kinds)
 
     if preds is None:
         preds = census_mod.census(list(samples) if samples else None)
@@ -706,7 +726,7 @@ def corpus_floor(
         for p in preds:
             by_segment.setdefault((p.sample, p.segment), []).append(p)
         for seg, group in sorted(by_segment.items()):
-            if any(pair.kind == "volume" for pair in census_mod.pairs(group)):
+            if any(pair.kind in wanted_kinds for pair in census_mod.pairs(group)):
                 wanted.append(seg)
     else:
         wanted = list(segments)
