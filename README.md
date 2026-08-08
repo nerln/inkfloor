@@ -69,6 +69,26 @@ effect and checks the confounders it can reach. It does not run the counterfactu
 does not establish a cause. [What inkfloor does not do](#what-inkfloor-does-not-do) is the
 full boundary.
 
+## Check it yourself in two minutes
+
+Nothing here has to be taken on trust. The cheapest independent check of the corpus result
+costs 71 MB and one command:
+
+```
+pip install git+https://github.com/nerln/inkfloor
+inkfloor corpus --kind model --samples PHerc0500P2 --limit 1 --dry-run   # prints the bytes first
+inkfloor corpus --kind model --samples PHerc0500P2 --limit 1
+```
+
+No credentials, no GPU, no account: the bucket is read anonymously over HTTP. Every command
+announces its download before the first byte moves and refuses to start without `--yes` if you
+would rather not.
+
+The full corpus run behind [results/anchors-2026-08-08.md](results/anchors-2026-08-08.md) is
+`inkfloor corpus --kind model`, which fetches 5.3 GB and measures 56 pairs across 55 segments.
+Its output is committed, so the table can be checked against the JSON without downloading
+anything at all.
+
 ## Install
 
 ```
