@@ -1,8 +1,8 @@
-"""Accesso in sola lettura al bucket pubblico della Vesuvius Challenge.
+"""Read-only access to the public Vesuvius Challenge bucket.
 
-Un solo punto di ingresso per la rete, così i moduli a monte non scrivono file da soli e
-la cache resta in un posto prevedibile. Nessuna credenziale: il bucket è pubblico e le
-richieste sono anonime.
+A single entry point for network access, so upstream modules do not write files on their own
+and the cache stays in a predictable location. No credentials: the bucket is public and
+requests are anonymous.
 """
 
 from __future__ import annotations
@@ -19,14 +19,14 @@ BUCKET = "vesuvius-challenge-open-data"
 HOST = f"https://{BUCKET}.s3.amazonaws.com"
 NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
-# Sull'SSD esterno per default: il corpus è grande e non deve riempire il disco di sistema.
+# On the external SSD by default: the corpus is large and must not fill the system disk.
 CACHE_ROOT = Path(os.environ.get("INKFLOOR_CACHE", "/Volumes/AppsAndFiles/dev/inkfloor/cache"))
 
 TIMEOUT = 300
 
 
 class FetchError(RuntimeError):
-    """Il bucket ha risposto in modo che non possiamo usare."""
+    """The bucket responded in a way that we cannot use."""
 
 
 def _local_path(key: str) -> Path:
@@ -34,10 +34,11 @@ def _local_path(key: str) -> Path:
 
 
 def fetch(key: str) -> Path:
-    """Scarica `key` in cache e restituisce il path locale. Non riscarica se già presente.
+    """Download `key` into the cache and return the local path.
 
-    Non valida il contenuto: un file troncato da una corsa precedente resta troncato. Usa
-    `fetch(key, verify=True)` quando servirà, per ora la cache è append-only e monoprocesso.
+    It does not redownload it if already present. It does not validate content: a file
+    truncated by a previous run stays truncated. Use `fetch(key, verify=True)` when needed;
+    for now, the cache is append-only and single-process.
     """
     dst = _local_path(key)
     if dst.exists() and dst.stat().st_size > 0:
@@ -56,7 +57,7 @@ def fetch(key: str) -> Path:
 
 
 def get_bytes(key: str, start: int | None = None, end: int | None = None) -> bytes:
-    """GET, opzionalmente con Range. Le richieste parziali NON vengono messe in cache."""
+    """GET, optionally with Range. Partial requests are NOT cached."""
     req = urllib.request.Request(f"{HOST}/{key}")
     if start is not None:
         req.add_header("Range", f"bytes={start}-{'' if end is None else end}")
@@ -68,10 +69,10 @@ def get_bytes(key: str, start: int | None = None, end: int | None = None) -> byt
 
 
 def list_keys(prefix: str, suffix: str | None = None) -> list[tuple[str, int]]:
-    """Elenca (key, size) sotto `prefix`, seguendo la paginazione fino in fondo.
+    """List (key, size) under `prefix`, following pagination all the way through.
 
-    Non usa delimiter: restituisce le key ricorsivamente. Per l'elenco delle "cartelle"
-    usa `list_prefixes`.
+    Does not use delimiter: returns keys recursively. Use `list_prefixes` to list
+    "directories".
     """
     out: list[tuple[str, int]] = []
     token: str | None = None
@@ -92,7 +93,7 @@ def list_keys(prefix: str, suffix: str | None = None) -> list[tuple[str, int]]:
 
 
 def list_prefixes(prefix: str) -> list[str]:
-    """I "sottodirectory" immediati sotto `prefix`."""
+    """The immediate "subdirectories" under `prefix`."""
     url = f"{HOST}/?list-type=2&prefix={urllib.parse.quote(prefix)}&delimiter=/&max-keys=1000"
     root = ET.fromstring(_raw(url))
     return [p.find(NS + "Prefix").text for p in root.findall(NS + "CommonPrefixes")]

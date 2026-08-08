@@ -1,13 +1,14 @@
-"""Esclusione dei confondenti geometrici e radiometrici.
+"""Exclusion of geometric and radiometric confounders.
 
-Il pavimento di riproducibilita' ha senso solo se le due derivazioni che confrontiamo
-guardano la stessa superficie negli stessi voxel. Qui si misurano le due cose che possono
-rendere il pavimento un artefatto:
+The reproducibility floor is meaningful only if the two derivations being compared look at
+the same surface in the same voxels. This module measures the two things that can turn the
+floor into an artifact:
 
-* `compare_meshes`: la mesh appiattita e' la stessa nelle due derivazioni?
-* `fit_intensity`: i due volumi sono allineati, e come si trasformano l'uno nell'altro?
+* `compare_meshes`: is the flattened mesh the same in both derivations?
+* `fit_intensity`: are the two volumes aligned, and how does one transform into the other?
 
-Nessuna funzione di questo modulo stampa, addestra o corregge qualcosa. Misura e restituisce.
+No function in this module prints, trains, or corrects anything. It only measures and
+returns results.
 """
 
 from __future__ import annotations
@@ -23,40 +24,40 @@ import tifffile
 
 from . import cache
 
-# Il tetto a cui la pipeline di ink detection satura le intensita' prima di dare in pasto
-# il volume al modello. Una frazione alta di voxel al tetto significa che il modello vede
-# una superficie piatta, e due volumi con frazioni molto diverse non sono confrontabili
-# anche se la relazione affine fra loro e' perfetta.
+# The ceiling at which the ink detection pipeline clips intensities before feeding the
+# volume to the model. A high fraction of voxels at the ceiling means the model sees a flat
+# surface, and two volumes with very different fractions are not comparable even if the
+# affine relationship between them is perfect.
 CLIP_CEIL = 200
 
-# Livello del multiscale che contiene i voxel a piena risoluzione.
+# Multiscale level containing the full-resolution voxels.
 LEVEL = "0"
 
 CHANNELS = ("x", "y", "z")
 
-# La scansione degli offset in z e' densa: ogni offset intero fra -chunk e +chunk. Una
-# scansione a scala logaritmica sembrava piu' economica ma e' sbagliata, perche' il picco di
-# correlazione e' larghissimo un voxel (r crolla da 0.9999 a 0.90 spostandosi di 1) e un
-# massimo vero a offset 3 resterebbe invisibile fra i campioni a 2 e a 4.
+# The z-offset scan is dense: every integer offset between -chunk and +chunk. A logarithmic
+# scan seemed cheaper but is wrong, because the correlation peak is only one voxel wide
+# (r drops from 0.9999 to 0.90 with a shift of 1), and a true maximum at offset 3 would
+# remain invisible between the samples at 2 and 4.
 #
-# Sottocampionamento spaziale usato SOLO per la scansione: con ~10^5 voxel la differenza fra
-# r=0.9999 e r=0.90 e' fuori discussione, e i 257 offset costano meno di un decimo di
-# secondo, cioe' niente rispetto al download.
+# Spatial subsampling used ONLY for the scan: with ~10^5 voxels the difference between
+# r=0.9999 and r=0.90 is beyond dispute, and the 257 offsets take less than a tenth of a
+# second, which is nothing compared with the download.
 _SCAN_STRIDE = 4
 
-# Quali offset finiscono in `IntensityFit.r_by_offset`: il massimo con i suoi vicini, piu'
-# una spalla a scala logaritmica. Riportarli tutti e 257 sporcherebbe il report senza
-# aggiungere nulla a chi deve solo decidere se fidarsi del fit.
+# Which offsets go into `IntensityFit.r_by_offset`: the maximum and its neighbors, plus a
+# logarithmic-scale shoulder. Reporting all 257 would clutter the report without adding
+# anything for someone who only needs to decide whether to trust the fit.
 _REPORT_NEIGHBOURS = 2
 _REPORT_SHOULDER = (0, 1, 2, 4, 8, 16, 32, 64, 128)
 
 
 class GeometryError(RuntimeError):
-    """Dati che non sappiamo leggere senza tirare a indovinare.
+    """Data that we cannot read without resorting to guesswork.
 
-    Diverso da `None`: `None` vuol dire "misura non applicabile a questa coppia" (mesh non
-    pubblicata, volumi non omologhi). `GeometryError` vuol dire "il formato non e' quello
-    che questo modulo sa leggere", e va corretto nel codice, non ignorato.
+    Unlike `None`: `None` means "measurement not applicable to this pair" (mesh not
+    published, volumes not corresponding). `GeometryError` means "the format is not one
+    this module knows how to read," and must be fixed in the code, not ignored.
     """
 
 
@@ -68,28 +69,28 @@ class MeshCheck:
     identical: bool
     shape_a: tuple[int, int]
     shape_b: tuple[int, int]
-    max_abs_diff: dict[str, float]   # per canale "x", "y", "z"
-    note: str                        # perche' non identiche, se non lo sono
+    max_abs_diff: dict[str, float]   # per channel: "x", "y", "z"
+    note: str                        # why they are not identical, if they are not
 
 
 def compare_meshes(segment_prefix: str, vol_a: str, vol_b: str) -> MeshCheck | None:
-    """Confronta le tifxyz delle due derivazioni. None se una delle due non e' pubblicata.
+    """Compare the tifxyz data from both derivations. None if either is not published.
 
-    NON confronta i byte dei file: la compressione da' dimensioni diverse a contenuto
-    identico (nel corpus una derivazione scrive LZW e l'altra TIFF non compresso, con un
-    rapporto di quasi 2:1 sulla stessa matrice). Confronta gli array decodificati.
+    Does NOT compare file bytes: compression gives files different sizes despite identical
+    content (in the corpus, one derivation writes LZW and the other writes uncompressed TIFF,
+    with a ratio of nearly 2:1 for the same matrix). It compares the decoded arrays.
 
-    NON guarda il `meta.json` per decidere `identical`: quel sidecar contiene campi di
-    provenienza (uuid, area, precisione della scala) che differiscono anche quando le
-    coordinate sono identiche al bit. Le differenze del sidecar finiscono in `note`, dove
-    informano senza falsare il verdetto.
+    Does NOT look at `meta.json` to decide `identical`: that sidecar contains provenance
+    fields (uuid, area, scale precision) that differ even when the coordinates are
+    bit-identical. Sidecar differences go into `note`, where they provide information
+    without skewing the verdict.
 
-    NON riallinea e non ricampiona: se le due matrici hanno forma diversa, il confronto
-    voxel per voxel non viene tentato e `max_abs_diff` vale `inf` su tutti i canali.
+    Does NOT realign or resample: if the two matrices have different shapes, no voxel-wise
+    comparison is attempted and `max_abs_diff` is `inf` on every channel.
 
-    `segment_prefix` e' il prefisso S3 del segmento, per esempio
+    `segment_prefix` is the segment's S3 prefix, for example
     "PHerc0172/segments/20251107110950-w064_20251107110950052_flatboi".
-    `vol_a` / `vol_b` sono gli id di volume, per esempio "20241024131838".
+    `vol_a` / `vol_b` are the volume IDs, for example "20241024131838".
     """
     prefix = segment_prefix.rstrip("/")
     dir_a = _find_tifxyz(prefix, vol_a)
@@ -148,12 +149,11 @@ def compare_meshes(segment_prefix: str, vol_a: str, vol_b: str) -> MeshCheck | N
 
 
 def _find_tifxyz(segment_prefix: str, vol: str) -> str | None:
-    """Il prefisso della tifxyz derivata da `vol`, senza slash finale. None se assente.
+    """Prefix of the tifxyz derived from `vol`, without a trailing slash. None if absent.
 
-    NON indovina: pretende il marcatore "-on-<vol>-" nel nome della cartella, che e' come
-    il corpus registra su quale volume e' stata appiattita la mesh. Se piu' cartelle
-    corrispondono prende la prima in ordine lessicografico, in modo che due esecuzioni
-    diano lo stesso risultato.
+    Does NOT guess: it requires the "-on-<vol>-" marker in the directory name, which is how
+    the corpus records which volume the mesh was flattened on. If multiple directories
+    match, it takes the first in lexicographic order so that two runs give the same result.
     """
     try:
         dirs = cache.list_prefixes(f"{segment_prefix}/mesh/")
@@ -167,7 +167,7 @@ def _find_tifxyz(segment_prefix: str, vol: str) -> str | None:
 
 
 def _read_tif(key: str) -> np.ndarray | None:
-    """L'array decodificato, o None se il file non e' pubblicato."""
+    """The decoded array, or None if the file is not published."""
     try:
         path = cache.fetch(key)
     except cache.FetchError:
@@ -182,7 +182,7 @@ def _shape2(a: np.ndarray) -> tuple[int, int]:
 
 
 def _meta_note(dir_a: str, dir_b: str) -> str:
-    """Riassunto delle differenze fra i due meta.json. Stringa vuota se non leggibili."""
+    """Summary of differences between the two meta.json files. Empty if unreadable."""
     try:
         ma = cache.get_json(f"{dir_a}/meta.json")
         mb = cache.get_json(f"{dir_b}/meta.json")
@@ -200,9 +200,9 @@ def _meta_note(dir_a: str, dir_b: str) -> str:
 
 @dataclass(frozen=True)
 class _ZArray:
-    """Il minimo indispensabile di uno zarr v2 per leggerne i chunk a mano."""
+    """The bare minimum of a zarr v2 needed to read its chunks manually."""
 
-    prefix: str                  # ".../<vol>.zarr/0", senza slash finale
+    prefix: str                  # ".../<vol>.zarr/0", without a trailing slash
     shape: tuple[int, ...]
     chunks: tuple[int, ...]
     dtype: np.dtype
@@ -212,22 +212,22 @@ class _ZArray:
 
     @property
     def full_chunks(self) -> tuple[int, ...]:
-        """Quanti chunk sono interamente dentro l'array, per asse."""
+        """Number of chunks entirely within the array, per axis."""
         return tuple(s // c for s, c in zip(self.shape, self.chunks))
 
 
 def _read_zarray(vol_prefix: str, level: str = LEVEL) -> _ZArray:
-    """Legge `<vol>/<level>/.zarray`.
+    """Read `<vol>/<level>/.zarray`.
 
-    NON supporta zarr v3 (`zarr.json`), i filtri, e gli array di piu' o meno di 3 assi:
-    su quei casi solleva GeometryError invece di leggere byte a caso.
+    Does NOT support zarr v3 (`zarr.json`), filters, or arrays with more or fewer than 3
+    axes: in those cases it raises GeometryError rather than reading arbitrary bytes.
     """
     prefix = f"{vol_prefix.rstrip('/')}/{level}"
     meta = cache.get_json(f"{prefix}/.zarray")
     if int(meta.get("zarr_format", 0)) != 2:
-        raise GeometryError(f"zarr_format {meta.get('zarr_format')} non supportato in {prefix}")
+        raise GeometryError(f"unsupported zarr_format {meta.get('zarr_format')} in {prefix}")
     if meta.get("filters"):
-        raise GeometryError(f"filtri non supportati in {prefix}: {meta['filters']}")
+        raise GeometryError(f"unsupported filters in {prefix}: {meta['filters']}")
     if meta.get("dimension_separator", ".") != "/":
         raise GeometryError(f"dimension_separator {meta.get('dimension_separator')!r} in {prefix}")
     shape = tuple(int(v) for v in meta["shape"])
@@ -240,7 +240,7 @@ def _read_zarray(vol_prefix: str, level: str = LEVEL) -> _ZArray:
     dtype = np.dtype(meta["dtype"])
     if dtype.kind not in ("u", "i") or dtype.itemsize > 2:
         raise GeometryError(
-            f"dtype {dtype} in {prefix}: questo modulo accumula istogrammi esatti e "
+            f"dtype {dtype} in {prefix}: this module accumulates exact histograms and "
             "supporta solo interi da 1 o 2 byte"
         )
     return _ZArray(
@@ -255,17 +255,17 @@ def _read_zarray(vol_prefix: str, level: str = LEVEL) -> _ZArray:
 
 
 def _decode_chunk(z: _ZArray, raw: bytes) -> np.ndarray:
-    """Un chunk decodificato, di forma `z.chunks`.
+    """A decoded chunk with shape `z.chunks`.
 
-    NON applica filtri e NON ritaglia il bordo: in zarr v2 anche il chunk a cavallo del
-    bordo e' memorizzato per intero, e la coda oltre `shape` resta come l'ha scritta chi
-    ha prodotto l'array.
+    Does NOT apply filters and does NOT crop the edge: in zarr v2 even a chunk straddling
+    the edge is stored in full, and the tail beyond `shape` remains as the array's producer
+    wrote it.
     """
     comp = z.compressor
     if comp is None:
         buf: object = raw
     elif comp.get("id") == "blosc":
-        # L'header blosc porta con se' clevel, shuffle e cname: non serve rileggerli.
+        # The blosc header carries clevel, shuffle, and cname, so they need not be reread.
         buf = numcodecs.Blosc().decode(raw)
     else:
         buf = numcodecs.get_codec(comp).decode(raw)
@@ -287,10 +287,10 @@ def _read_chunk(
     idx: tuple[int, int, int],
     memo: dict[tuple[str, int, int, int], np.ndarray | None],
 ) -> np.ndarray | None:
-    """Il chunk `idx`, o None se non e' memorizzato (in zarr = tutto `fill_value`).
+    """The `idx` chunk, or None if not stored (in zarr = all `fill_value`).
 
-    NON distingue un chunk assente da uno pieno di `fill_value`: per lo scopo di questo
-    modulo, dove `fill_value` e' 0 e i voxel validi sono > 0, sono la stessa cosa.
+    Does NOT distinguish a missing chunk from one full of `fill_value`: for this module's
+    purpose, where `fill_value` is 0 and valid voxels are > 0, they are the same thing.
     """
     key = (z.prefix, *idx)
     if key in memo:
@@ -309,11 +309,11 @@ def _read_chunk(
 
 
 def _chunk_present(z: _ZArray, idx: tuple[int, int, int]) -> bool:
-    """Sonda con una Range di un byte se il chunk esiste, senza scaricarlo.
+    """Probe whether the chunk exists with a one-byte Range, without downloading it.
 
-    Serve a scartare i candidati vuoti a costo quasi zero: nel corpus circa il 40% delle
-    posizioni della griglia non e' memorizzato, e scaricare 2 MiB per accorgersene sarebbe
-    lo spreco dominante della funzione.
+    This discards empty candidates at almost no cost: in the corpus, about 40% of grid
+    positions are not stored, and downloading 2 MiB to discover that would be the
+    function's dominant source of waste.
     """
     key = "/".join((z.prefix, *(str(i) for i in idx)))
     try:
@@ -335,13 +335,13 @@ def _window_z(
     dz: int,
     memo: dict[tuple[str, int, int, int], np.ndarray | None],
 ) -> np.ndarray:
-    """Il blocco di `z` omologo al chunk `idx`, traslato di `dz` voxel lungo z.
+    """The block of `z` corresponding to chunk `idx`, shifted by `dz` voxels along z.
 
-    Per `dz` diverso da zero serve leggere il chunk vicino: la finestra cade a cavallo di
-    due chunk. Le parti fuori dall'array e i chunk assenti valgono `fill_value`.
+    When `dz` is nonzero, the neighboring chunk must be read: the window straddles two
+    chunks. Parts outside the array and missing chunks have the value `fill_value`.
 
-    NON trasla in y e in x: il disallineamento laterale, se c'e', si vede nelle mappe di
-    ink e lo cerca `metrics.best_shift_iou`, non qui.
+    Does NOT shift in y or x: lateral misalignment, if present, is visible in the ink maps
+    and is sought by `metrics.best_shift_iou`, not here.
     """
     cz = z.chunks[0]
     zi, yi, xi = idx
@@ -361,7 +361,7 @@ def _window_z(
     return out
 
 
-# --------------------------------------------------------------------------- intensita'
+# --------------------------------------------------------------------------- intensities
 
 
 @dataclass(frozen=True)
@@ -372,12 +372,12 @@ class IntensityFit:
     n_voxel: int
     median_a: float
     median_b: float
-    clip_frac_a: float    # frazione di voxel >= 200, il tetto del clip della pipeline
+    clip_frac_a: float    # fraction of voxels >= 200, the pipeline's clipping ceiling
     clip_frac_b: float
     chunks_used: list[tuple[int, int, int]]
-    # Campi aggiunti in coda, tutti con default: le chiamate scritte contro la firma del
-    # contratto continuano a valere, e chi legge il report ha anche la prova che
-    # l'allineamento in z e' stato misurato invece di assunto.
+    # Fields appended at the end, all with defaults: calls written against the contract's
+    # signature remain valid, and report readers also have proof that z alignment was
+    # measured rather than assumed.
     z_offset: int = 0
     r_by_offset: tuple[tuple[int, float], ...] = ()
     note: str = ""
@@ -392,34 +392,34 @@ def fit_intensity(
     min_nonzero: float = 0.5,
     max_tries: int = 0,
 ) -> IntensityFit | None:
-    """Campiona chunk omologhi dai due volumi e stima A = slope*B + intercept.
+    """Sample corresponding chunks from both volumes and estimate A = slope*B + intercept.
 
-    Legge zarr v2 a mano: `.zarray` per shape/chunks/compressor, poi i chunk via HTTP.
-    Gestisce compressor null (byte grezzi) e blosc (numcodecs.Blosc). None se i due
-    volumi non hanno la stessa shape in y e x.
+    Reads zarr v2 manually: `.zarray` for shape/chunks/compressor, then chunks over HTTP.
+    Handles a null compressor (raw bytes) and blosc (numcodecs.Blosc). None if the two
+    volumes do not have the same shape in y and x.
 
-    NON assume che i due volumi siano allineati in z: cerca l'offset in z che massimizza
-    la correlazione e riporta sia `z_offset` sia `r_by_offset`, cosi' chi legge puo'
-    scartare il fit se r e' basso o se il massimo non cade a zero.
+    Does NOT assume that the two volumes are aligned in z: it finds the z offset that
+    maximizes correlation and reports both `z_offset` and `r_by_offset`, so readers can
+    reject the fit if r is low or if the maximum is not at zero.
 
-    NON usa una lista di chunk scelta a mano: estrae posizioni con `seed`, scarta quelle
-    dove uno dei due volumi non ha almeno `min_nonzero` di voxel > 0, e riporta in
-    `chunks_used` esattamente quelle su cui ha misurato. Cambiando `seed` cambiano i chunk
-    e non deve cambiare la stima: e' quello il controllo.
+    Does NOT use a hand-picked chunk list: it draws positions using `seed`, discards those
+    where fewer than a `min_nonzero` fraction of either volume's voxels are > 0, and reports
+    in `chunks_used` exactly those on which it measured. Changing `seed` changes the chunks
+    and must not change the estimate: that is the check.
 
-    NON e' una regressione robusta e NON ritaglia i voxel al tetto del clip: la stima e' un
-    minimi-quadrati ordinario di A su B sui voxel dove entrambi sono > 0, e la frazione al
-    tetto viene riportata a parte perche' e' proprio quella a rendere la retta ottimistica.
+    This is NOT robust regression and does NOT exclude voxels at the clipping ceiling: the
+    estimate is ordinary least squares of A on B over voxels where both are > 0, and the
+    fraction at the ceiling is reported separately because that is precisely what makes
+    the fitted line optimistic.
 
-    NON campiona i chunk di bordo: i candidati sono solo i chunk interamente dentro
-    entrambi gli array, cosi' la coda di padding oltre `shape` non entra mai nella stima.
+    Does NOT sample edge chunks: candidates are only chunks entirely within both arrays, so
+    the padding tail beyond `shape` never enters the estimate.
 
-    NON tiene in memoria piu' di circa `2 * n_chunks` chunk alla volta (con i 128^3 uint8
-    del corpus, una quarantina di MB con i valori di default).
+    Does NOT keep more than about `2 * n_chunks` chunks in memory at once (with the corpus's
+    128^3 uint8 chunks, about forty MB with the default values).
 
-    Restituisce None anche quando: uno dei due volumi non e' pubblicato sotto
-    `<sample>/volumes/`, le dimensioni dei chunk differiscono, o nessuna posizione
-    campionata ha dati in entrambi i volumi.
+    Also returns None when either volume is not published under `<sample>/volumes/`, the
+    chunk dimensions differ, or no sampled position has data in both volumes.
     """
     prefix_a = _resolve_volume(sample, vol_a)
     prefix_b = _resolve_volume(sample, vol_b)
@@ -439,8 +439,8 @@ def fit_intensity(
     if not picks:
         return None
 
-    # I chunk gia' scaricati durante la selezione entrano nel memo, cosi' la sonda di
-    # allineamento paga soltanto i due vicini in z.
+    # Chunks already downloaded during selection go into the memo, so the alignment probe
+    # pays only for the two z neighbors.
     memo: dict[tuple[str, int, int, int], np.ndarray | None] = {}
     for idx, a_chunk, b_chunk in picks:
         memo[(za.prefix, *idx)] = a_chunk
@@ -448,7 +448,7 @@ def fit_intensity(
     scan = _scan_z_offsets(za, zb, picks[0][0], memo)
     z_offset = max(scan, key=lambda d: (-math.inf if math.isnan(scan[d]) else scan[d], -abs(d)))
 
-    memo.clear()   # i due vicini della sonda non servono piu'
+    memo.clear()   # the probe's two neighbors are no longer needed
 
     acc = _Accumulator(za.dtype)
     used: list[tuple[int, int, int]] = []
@@ -456,8 +456,8 @@ def fit_intensity(
         if z_offset == 0:
             b = b_chunk
         else:
-            # Il memo locale muore a fine iterazione: la finestra traslata cade a cavallo di
-            # due chunk, e il primo dei due e' quello che abbiamo gia' in mano.
+            # The local memo dies at the end of the iteration: the shifted window straddles
+            # two chunks, and the first is the one already in hand.
             b = _window_z(zb, idx, z_offset, {(zb.prefix, *idx): b_chunk})
         mask = (a_chunk > 0) & (b > 0)
         if not mask.any():
@@ -491,9 +491,9 @@ def fit_intensity(
 
 
 def _resolve_volume(sample: str, vol: str) -> str | None:
-    """Dall'id di volume al prefisso S3 dello zarr. None se non e' pubblicato.
+    """Map a volume ID to its zarr S3 prefix. None if it is not published.
 
-    NON scarica nulla del volume: una sola LIST sui figli di `<sample>/volumes/`.
+    Does NOT download any volume data: just one LIST of the children of `<sample>/volumes/`.
     """
     if vol.endswith(".zarr") or "/" in vol:
         return vol.rstrip("/")
@@ -516,16 +516,16 @@ def _select_chunks(
     min_nonzero: float,
     max_tries: int,
 ) -> tuple[list[tuple[tuple[int, int, int], np.ndarray, np.ndarray]], str]:
-    """Sceglie posizioni riproducibili con dati in entrambi i volumi.
+    """Choose reproducible positions with data in both volumes.
 
-    NON cerca i chunk "migliori" e NON guarda dove passa la mesh: campiona uniformemente
-    la griglia comune con un seed, sonda la presenza con una Range di un byte, e accetta
-    solo dove entrambi i volumi hanno almeno `min_nonzero` di voxel > 0. Restituisce anche
-    gli array, perche' riscaricarli nella fase di stima sarebbe il doppio del traffico.
+    Does NOT seek the "best" chunks or look at where the mesh runs: it uniformly samples
+    the common grid with a seed, probes for presence with a one-byte Range, and accepts only
+    positions where at least a `min_nonzero` fraction of each volume's voxels are > 0. It
+    also returns the arrays, because downloading them again during estimation would double
+    the traffic.
     """
-    # I candidati escludono il primo e l'ultimo chunk pieno di ogni asse: il primo e
-    # l'ultimo in z servono come vicini per la scansione degli offset, e il bordo porta
-    # dentro il padding.
+    # Candidates exclude the first and last full chunk on each axis: the first and last in
+    # z are needed as neighbors for the offset scan, and the edge brings in the padding.
     hi = [min(a, b) - 1 for a, b in zip(za.full_chunks, zb.full_chunks)]
     if any(h <= 1 for h in hi):
         return [], "common grid too small to sample interior chunks"
@@ -574,17 +574,18 @@ def _scan_z_offsets(
     idx: tuple[int, int, int],
     memo: dict[tuple[str, int, int, int], np.ndarray | None],
 ) -> dict[int, float]:
-    """Correlazione fra i due volumi per ogni offset intero in z, su un chunk sonda.
+    """Correlation between the volumes at each integer z offset, on one probe chunk.
 
-    Un solo chunk sonda, e i suoi due vicini in z: la sonda serve a stabilire l'offset, e
-    ripeterla su tutti i chunk moltiplicherebbe il traffico per misurare la stessa cosa.
+    Just one probe chunk and its two z neighbors: the probe establishes the offset, and
+    repeating it on every chunk would multiply traffic to measure the same thing.
 
-    NON e' la correlazione del fit: e' calcolata su un solo chunk e sottocampionata di
-    `_SCAN_STRIDE` in y e x. Serve a scegliere l'offset e a mostrare quanto e' stretto il
-    picco, non a quantificare l'accordo.
+    This is NOT the fit correlation: it is calculated on one chunk and subsampled by
+    `_SCAN_STRIDE` in y and x. It selects the offset and shows how narrow the peak is; it
+    does not quantify agreement.
 
-    NON cerca offset piu' grandi di un chunk: oltre quello i due volumi non sono la stessa
-    acquisizione riallineata ma due cose diverse, e il fit va scartato, non spostato.
+    Does NOT search offsets larger than one chunk: beyond that, the two volumes are not the
+    same realigned acquisition but two different things, and the fit must be rejected, not
+    shifted.
     """
     a_full = _read_chunk(za, idx, memo)
     if a_full is None:
@@ -612,7 +613,7 @@ def _scan_z_offsets(
 
 
 def _report_offsets(scan: dict[int, float], best: int) -> tuple[tuple[int, float], ...]:
-    """Il sottoinsieme della scansione che finisce nel report: il picco e la sua spalla."""
+    """Subset of the scan included in the report: the peak and its shoulder."""
     wanted = {best + d for d in range(-_REPORT_NEIGHBOURS, _REPORT_NEIGHBOURS + 1)}
     for s in _REPORT_SHOULDER:
         wanted |= {s, -s}
@@ -620,15 +621,15 @@ def _report_offsets(scan: dict[int, float], best: int) -> tuple[tuple[int, float
 
 
 class _Accumulator:
-    """Somme esatte e istogrammi marginali sui voxel validi, chunk dopo chunk.
+    """Exact sums and marginal histograms over valid voxels, chunk by chunk.
 
-    Le somme restano interi Python, quindi slope, intercept e r si calcolano da quantita'
-    esatte e non dipendono dall'ordine in cui sono arrivati i chunk. Gli istogrammi
-    marginali danno mediane e frazioni al tetto esatte con memoria costante: nessun array
-    di valori resta in vita dopo il chunk che l'ha prodotto.
+    The sums remain Python integers, so slope, intercept, and r are computed from exact
+    quantities and do not depend on the order in which chunks arrived. The marginal
+    histograms give exact medians and ceiling fractions with constant memory: no value
+    array remains alive after the chunk that produced it.
 
-    NON tiene l'istogramma congiunto: servirebbe per una regressione robusta, che questo
-    modulo non fa.
+    Does NOT keep the joint histogram: that would be needed for robust regression, which
+    this module does not perform.
     """
 
     def __init__(self, dtype: np.dtype) -> None:
@@ -672,10 +673,10 @@ class _Accumulator:
 
 
 def _median_from_hist(counts: np.ndarray, vmin: int) -> float:
-    """Mediana esatta da un istogramma per valore, con la convenzione di `numpy.median`.
+    """Exact median from a per-value histogram, using the `numpy.median` convention.
 
-    NON interpola: i valori sono interi, quindi per n pari la mediana e' la media dei due
-    elementi centrali e nient'altro.
+    Does NOT interpolate: values are integers, so for even n the median is the mean of the
+    two central elements and nothing else.
     """
     n = int(counts.sum())
     if n == 0:
@@ -687,7 +688,7 @@ def _median_from_hist(counts: np.ndarray, vmin: int) -> float:
 
 
 def _tail_frac(counts: np.ndarray, vmin: int, threshold: int) -> float:
-    """Frazione di voxel con valore >= `threshold`."""
+    """Fraction of voxels with value >= `threshold`."""
     n = int(counts.sum())
     if n == 0:
         return float("nan")

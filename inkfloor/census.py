@@ -1,12 +1,13 @@
-"""Censimento delle predizioni di inchiostro pubblicate, e classificazione delle coppie.
+"""Census of published ink predictions and classification of pairs.
 
-Il corpus pubblica le predizioni come TIFF dentro `<sample>/segments/<segment>/ink-detection/`,
-con tutti i metadati nel nome del file. Questo modulo legge quei nomi e NON apre i file: non
-decodifica un solo pixel, non scarica un solo TIFF. Solo elenchi S3 e parsing di stringhe.
+The corpus publishes predictions as TIFFs under
+`<sample>/segments/<segment>/ink-detection/`, with all metadata in the filename. This module
+reads those names and DOES NOT open the files: it does not decode a single pixel or download
+a single TIFF. Only S3 listings and string parsing.
 
-La regola che governa tutto: `parse_prediction` restituisce None invece di indovinare. Un
-nome che non corrisponde allo schema noto viene scartato e contato, mai interpretato a metà.
-Un parser che tira a indovinare falsa il censimento a valle e non lascia tracce.
+The rule governing everything: `parse_prediction` returns None rather than guessing. A name
+that does not match the known schema is discarded and counted, never partially interpreted.
+A parser that guesses corrupts the downstream census and leaves no trace.
 """
 
 from __future__ import annotations
@@ -20,16 +21,16 @@ from dataclasses import dataclass, field
 from . import cache
 
 # ---------------------------------------------------------------------------
-# Layout del bucket
+# Bucket layout
 # ---------------------------------------------------------------------------
 
 SEGMENTS_DIR = "segments"
 INK_DIR = "ink-detection"
 
-#: Nomi di cartelle che, dentro un segmento, contengono artefatti e non altri segmenti.
-#: Serve solo a non sprecare richieste: se qui manca un nome, il censimento resta corretto
-#: ma fa qualche GET in più. Se ce n'è uno di troppo, un segmento annidato con quel nome
-#: verrebbe saltato, quindi la lista tiene solo nomi visti davvero nel corpus.
+#: Directory names that contain artifacts, rather than other segments, within a segment.
+#: This only avoids wasting requests: if a name is missing here, the census stays correct
+#: but makes a few more GETs. If there is one name too many, a nested segment with that name
+#: would be skipped, so the list contains only names actually seen in the corpus.
 ARTIFACT_DIRS = frozenset(
     {
         INK_DIR,
@@ -44,15 +45,16 @@ ARTIFACT_DIRS = frozenset(
     }
 )
 
-#: Quanti elenchi S3 in parallelo. Sono GET anonime su un bucket pubblico, nessuna scrittura.
+#: How many S3 listings to run in parallel. They are anonymous GETs to a public bucket;
+#: nothing is written.
 MAX_WORKERS = 8
 
-#: Quanti nomi di key scartate tenere come campione nel referto.
+#: How many discarded key names to retain as examples in the report.
 MAX_DISCARDED_EXAMPLES = 12
 
 
 # ---------------------------------------------------------------------------
-# Lo schema dei nomi
+# Filename schema
 # ---------------------------------------------------------------------------
 
 # PHerc0172-20251107110950-7.91um-53keV-volume-20241024131838
@@ -61,10 +63,10 @@ MAX_DISCARDED_EXAMPLES = 12
 # PHerc0139-20250108000000-1.129um-0.22m-59keV-volume-20260413113053-L1
 #   -20260709123958-mrg20736-1um-s1z2-tile256-stride128.tif
 #
-# Pezzi opzionali verificati nel corpus: la distanza sorgente-oggetto (`-0.22m`), il livello
-# piramidale (`-L1`), la coppia tile/stride. Il nome del modello può contenere trattini e
-# perfino spezzoni come `1um`, quindi il voxel si ancora subito dopo il timestamp del
-# segmento e il modello subito dopo l'id del volume (o dopo il livello, se c'è).
+# Optional parts verified in the corpus: source-to-object distance (`-0.22m`), pyramid level
+# (`-L1`), and the tile/stride pair. The model name can contain hyphens and even fragments
+# such as `1um`, so the voxel is anchored immediately after the segment timestamp and the
+# model immediately after the volume ID (or after the level, when present).
 _NAME_RX = re.compile(
     r"^(?P<sample>[A-Za-z0-9]+)"
     r"-(?P<segment_ts>\d{14})"
@@ -78,21 +80,22 @@ _NAME_RX = re.compile(
     r"\.tif$"
 )
 
-# `.+?` per il nome del modello è elastico: se la coda del nome è storta (per esempio
-# `-tile64` senza `-stride16`, o un suffisso `-ds8` dopo lo stride) il pezzo storto finirebbe
-# dentro il nome del modello e tile/stride resterebbero a None, senza che nulla segnali il
-# problema. Due predizioni con stride diverso sembrerebbero lo stesso modello. Quindi: se nel
-# modello resta un token `-tile<cifre>` o `-stride<cifre>`, il nome si scarta.
+# `.+?` for the model name is permissive: if the filename tail is malformed (for example,
+# `-tile64` without `-stride16`, or a `-ds8` suffix after the stride), the malformed piece
+# would end up in the model name and tile/stride would remain None, with nothing flagging the
+# problem. Two predictions with different strides would appear to use the same model.
+# Therefore, if a `-tile<digits>` or `-stride<digits>` token remains in the model, the name
+# is discarded.
 _LEFTOVER_RX = re.compile(r"-(?:tile|stride)\d")
 
-# Sottocartella delle anteprime ridotte: stessa predizione, raster piu' piccolo.
+# Subdirectory for reduced previews: the same prediction, with a smaller raster.
 DOWNSAMPLED_DIR = "downsampled"
 
-# Estensioni immagine che NON sono .tif. Servono solo a distinguere un formato inatteso da
-# un file qualunque: non vengono mai lette, perche' il censimento legge solo nomi e dimensioni.
+# Image extensions that are NOT .tif. They are used only to distinguish an unexpected format
+# from an arbitrary file: they are never read, because the census reads only names and sizes.
 _IMAGE_SUFFIXES = (".tiff", ".png", ".jpg", ".jpeg")
 
-# Motivi di scarto, in ordine di controllo.
+# Discard reasons, in check order.
 R_NOT_TIF = "not-a-tif"
 R_OTHER_IMAGE = "image-under-ink-detection-that-is-not-a-tif"
 R_NOT_INK = "not-under-ink-detection"
@@ -103,17 +106,17 @@ R_SEGMENT = "segment-mismatch-with-path"
 
 
 # ---------------------------------------------------------------------------
-# Dati
+# Data
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class Prediction:
-    """Una predizione di inchiostro pubblicata, come la descrive il suo nome file.
+    """A published ink prediction, as described by its filename.
 
-    NON dice nulla sul contenuto: shape, dtype e frazione di pixel validi si sanno solo
-    aprendo il TIFF, che qui non viene toccato. `size_bytes` è la dimensione dell'oggetto S3,
-    non il numero di pixel: la compressione la rende inconfrontabile fra predizioni diverse.
+    Says NOTHING about the content: shape, dtype, and fraction of valid pixels are known only
+    by opening the TIFF, which is not touched here. `size_bytes` is the size of the S3 object,
+    not the pixel count: compression makes object sizes incomparable across predictions.
     """
 
     key: str
@@ -125,24 +128,24 @@ class Prediction:
     tile: int | None
     stride: int | None
     size_bytes: int
-    # Campi aggiuntivi, tutti con default: chi costruisce un Prediction con i soli campi del
-    # contratto continua a funzionare. `level` è None quando il nome non lo dichiara, e in
-    # quel caso resta ignoto: non viene assunto 0.
+    # Additional fields, all with defaults: code constructing a Prediction with only the
+    # contract fields keeps working. `level` is None when the name does not declare it, and
+    # remains unknown in that case: 0 is not assumed.
     level: int | None = None
     kev: float | None = None
     dist_m: float | None = None
 
     @property
     def segment_prefix(self) -> str:
-        """Il prefisso S3 del segmento, con lo slash finale. Non verifica che esista."""
+        """The segment's S3 prefix, including the trailing slash. Does not check if it exists."""
         return self.key.split(f"/{INK_DIR}/", 1)[0] + "/"
 
     @property
     def step_um(self) -> float | None:
-        """Passo raster effettivo: `voxel_um * 2**level`.
+        """Effective raster step: `voxel_um * 2**level`.
 
-        None quando il livello piramidale non è dichiarato nel nome. NON tira a indovinare
-        L=0: un nome senza livello non dice che il livello sia zero, dice che non lo sappiamo.
+        None when the pyramid level is not declared in the name. It DOES NOT guess L=0: a
+        name without a level does not say the level is zero; it says that we do not know it.
         """
         if self.level is None:
             return None
@@ -150,17 +153,17 @@ class Prediction:
 
     @property
     def raster(self) -> tuple[float, int | None]:
-        """Identità del raster su cui vive la mappa: (voxel_um, level).
+        """Identity of the raster on which the map lives: (voxel_um, level).
 
-        Due predizioni sono sovrapponibili pixel a pixel solo se questa coppia coincide.
-        NON è una shape: non garantisce che i due TIFF abbiano le stesse dimensioni.
+        Two predictions can be overlaid pixel for pixel only if this pair matches. It is NOT
+        a shape: it does not guarantee that the two TIFFs have the same dimensions.
         """
         return (self.voxel_um, self.level)
 
 
 @dataclass(frozen=True)
 class Pair:
-    """Due predizioni sullo stesso segmento, e cosa cambia fra loro."""
+    """Two predictions for the same segment, and what differs between them."""
 
     a: Prediction
     b: Prediction
@@ -169,9 +172,9 @@ class Pair:
 
 @dataclass(frozen=True)
 class CensusReport:
-    """Esito del censimento, con la contabilità di quello che è stato scartato.
+    """Census result, including an accounting of what was discarded.
 
-    NON stampa niente: i campi sono pensati per essere formattati da `cli.py`.
+    Prints NOTHING: the fields are intended to be formatted by `cli.py`.
     """
 
     predictions: list[Prediction]
@@ -180,7 +183,7 @@ class CensusReport:
     n_kept: int
     n_discarded: int
     discarded_by_reason: dict[str, int]
-    discarded_examples: list[tuple[str, str]]  # (key, motivo), campione
+    discarded_examples: list[tuple[str, str]]  # (key, reason), example
     n_ink_dirs: int
     n_segments_with_predictions: int
     samples_with_predictions: dict[str, int]
@@ -188,7 +191,7 @@ class CensusReport:
 
 @dataclass(frozen=True)
 class PairStats:
-    """Le coppie tenute e, soprattutto, quelle escluse e perché."""
+    """The retained pairs and, above all, the excluded ones and why."""
 
     pairs: list[Pair]
     by_kind: dict[str, int]
@@ -209,28 +212,28 @@ class PairStats:
 
 
 def parse_prediction(key: str, size_bytes: int) -> Prediction | None:
-    """Estrae i campi dal nome file. None se il nome non segue lo schema noto.
+    """Extract fields from the filename. None if the name does not follow the known schema.
 
-    NON indovina: se manca un pezzo obbligatorio, se il campione o il timestamp del segmento
-    nel nome non combaciano con il path, o se il file non è un TIFF direttamente dentro
-    `ink-detection/`, restituisce None. In particolare scarta le anteprime `downsampled/*.jpg`,
-    che sono la stessa predizione ridotta 8x e non la predizione.
+    Does NOT guess: if a required part is missing, if the sample or segment timestamp in the
+    name does not match the path, or if the file is not a TIFF directly inside
+    `ink-detection/`, it returns None. In particular, it discards `downsampled/*.jpg`
+    previews, which are the same prediction reduced 8x, not the prediction itself.
 
-    NON legge il file e NON tocca la rete.
+    Does NOT read the file and does NOT touch the network.
     """
     pred, _ = _parse_with_reason(key, size_bytes)
     return pred
 
 
 def _parse_with_reason(key: str, size_bytes: int) -> tuple[Prediction | None, str | None]:
-    """Come `parse_prediction`, ma dice anche perché ha scartato. Uso interno al referto.
+    """Like `parse_prediction`, but also says why it discarded a key. Internal report use.
 
-    Un file non-.tif sotto ink-detection viene distinto dalle anteprime: oggi ogni scarto
-    e' un .jpg dentro `downsampled/`, cioe' la stessa predizione ridotta, e ignorarlo e'
-    corretto. Ma il censimento sostiene una tesi esaustiva ("un solo segmento porta una
-    coppia di derivazioni"), e quella tesi diventerebbe falsa in silenzio il giorno in cui
-    venisse pubblicata una predizione con un'altra estensione. Quel caso ha un motivo di
-    scarto tutto suo, cosi' il referto lo puo' gridare invece di sommarlo alle anteprime.
+    A non-.tif file under ink-detection is distinguished from previews: today every discard
+    is a .jpg inside `downsampled/`, meaning the same reduced prediction, and ignoring it is
+    correct. But the census supports an exhaustive claim ("only one segment has a pair
+    of derivations"), and that claim would silently become false the day a prediction with
+    another extension was published. That case has its own discard reason, so the report can
+    shout about it instead of adding it to the previews.
     """
     if not key.endswith(".tif"):
         under_ink = f"/{INK_DIR}/" in key
@@ -286,14 +289,14 @@ def _parse_with_reason(key: str, size_bytes: int) -> tuple[Prediction | None, st
 
 
 # ---------------------------------------------------------------------------
-# Enumerazione
+# Enumeration
 # ---------------------------------------------------------------------------
 
 
 def samples_in_corpus() -> list[str]:
-    """I sample pubblicati, in ordine alfabetico.
+    """The published samples, in alphabetical order.
 
-    NON include i prefissi di servizio che iniziano con `_` (per esempio `_thumbnails/`).
+    Does NOT include service prefixes beginning with `_` (for example, `_thumbnails/`).
     """
     return sorted(
         p.rstrip("/") for p in cache.list_prefixes("") if p and not p.startswith("_")
@@ -301,11 +304,11 @@ def samples_in_corpus() -> list[str]:
 
 
 def _ink_keys_for_sample(sample: str) -> tuple[list[tuple[str, int]], int]:
-    """Tutte le key sotto gli `ink-detection/` di un sample, e quanti ne ha trovati.
+    """All keys under a sample's `ink-detection/` directories, and how many it found.
 
-    Prova prima `<sample>/segments/<candidato>/ink-detection/`. Se un candidato non ha
-    predizioni, guarda un livello più sotto: nel corpus esistono contenitori intermedi
-    (`segments/raw/<segmento>/`). NON scende oltre quel livello.
+    First tries `<sample>/segments/<candidate>/ink-detection/`. If a candidate has no
+    predictions, it looks one level lower: the corpus contains intermediate containers
+    (`segments/raw/<segment>/`). It does NOT descend beyond that level.
     """
     candidates = cache.list_prefixes(f"{sample}/{SEGMENTS_DIR}/")
     keys: list[tuple[str, int]] = []
@@ -341,18 +344,18 @@ def census_report(
     samples: list[str] | None = None,
     max_examples: int = MAX_DISCARDED_EXAMPLES,
 ) -> CensusReport:
-    """Come `census`, ma restituisce anche la contabilità degli scarti.
+    """Like `census`, but also returns an accounting of discards.
 
-    NON stampa e NON scarica i TIFF: fa solo ListObjectsV2 sul bucket. Il conteggio delle
-    key viste include tutto quello che sta sotto `ink-detection/`, anteprime comprese, così
-    che `n_keys_seen == n_kept + n_discarded` sia verificabile a occhio.
+    Does NOT print or download TIFFs: it only calls ListObjectsV2 on the bucket. The count of
+    keys seen includes everything under `ink-detection/`, previews included, so that
+    `n_keys_seen == n_kept + n_discarded` can be checked at a glance.
     """
     names = samples_in_corpus() if samples is None else [s.rstrip("/") for s in samples]
 
     kept: list[Prediction] = []
     reasons: Counter[str] = Counter()
-    # Il campione garantisce un nome per ogni motivo di scarto, poi si riempie fino al tetto:
-    # così un motivo raro non viene mai coperto da centinaia di scarti dello stesso tipo.
+    # The example set guarantees one name for each discard reason, then fills to the limit,
+    # so a rare reason is never hidden by hundreds of discards of the same type.
     first_of_reason: dict[str, str] = {}
     extra_examples: list[tuple[str, str]] = []
     n_keys = 0
@@ -396,18 +399,18 @@ def census_report(
     )
 
 
-#: Referto dell'ultimo censimento eseguito in questo processo. Serve solo a `census_stats()`,
-#: perché la firma di `census()` restituisce le predizioni e non ha posto per la contabilità.
-#: Nessuna logica del modulo lo legge: `census_report` e `pair_stats` restano funzioni pure.
+#: Report from the latest census run in this process. It is used only by `census_stats()`,
+#: because the `census()` signature returns predictions and has no room for the accounting.
+#: No module logic reads it: `census_report` and `pair_stats` remain pure functions.
 _last_report: CensusReport | None = None
 
 
 def census(samples: list[str] | None = None) -> list[Prediction]:
-    """Enumera le predizioni ink di tutto il corpus (o dei soli sample indicati).
+    """Enumerate ink predictions for the entire corpus (or only the specified samples).
 
-    NON restituisce gli scarti: per quelli serve `census_report`, che dà lo stesso elenco più
-    la contabilità di quante key sono state scartate e perché. Chi ha in mano solo questa
-    firma può leggere `census_stats()` subito dopo la chiamata.
+    Does NOT return discards: use `census_report` for those; it gives the same list plus an
+    accounting of how many keys were discarded and why. Code with access to only this
+    signature can read `census_stats()` immediately after the call.
     """
     global _last_report
     _last_report = census_report(samples)
@@ -415,11 +418,11 @@ def census(samples: list[str] | None = None) -> list[Prediction]:
 
 
 def census_stats() -> dict[str, object]:
-    """Contabilità dell'ultimo `census()` di questo processo, per chi stampa.
+    """Accounting for this process's latest `census()`, for code that prints it.
 
-    Dizionario vuoto se `census()` non è ancora stato chiamato: NON esegue un censimento per
-    rispondere e non tocca la rete. Le chiavi `skipped`, `n_skipped` e `unparsed` portano lo
-    stesso numero, cioè quante key sotto `ink-detection/` sono state rifiutate.
+    Empty dictionary if `census()` has not been called yet: it does NOT run a census to answer
+    and does not touch the network. The `skipped`, `n_skipped`, and `unparsed` keys carry the
+    same number: how many keys under `ink-detection/` were rejected.
     """
     r = _last_report
     if r is None:
@@ -438,16 +441,16 @@ def census_stats() -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# Coppie
+# Pairs
 # ---------------------------------------------------------------------------
 
 
 def comparable(a: Prediction, b: Prediction) -> bool:
-    """Vero se le due mappe vivono sullo stesso raster, cioè stesso voxel e stesso livello.
+    """True if both maps live on the same raster: same voxel and same level.
 
-    NON verifica le shape dei TIFF né l'allineamento della mesh: dice solo che confrontarle
-    pixel a pixel ha senso. Il livello ignoto (None) è considerato uguale solo a un altro
-    livello ignoto, perché due nomi che tacciono il livello tacciono la stessa cosa.
+    Does NOT check TIFF shapes or mesh alignment: it only says that comparing them pixel for
+    pixel makes sense. An unknown level (None) is considered equal only to another unknown
+    level, because two names that omit the level omit the same information.
     """
     return abs(a.voxel_um - b.voxel_um) < 1e-9 and a.level == b.level
 
@@ -456,7 +459,7 @@ def _kind(a: Prediction, b: Prediction) -> str | None:
     same_volume = a.volume == b.volume
     same_model = a.model == b.model
     if same_volume and same_model:
-        return None  # stesso volume e stesso modello: non è una coppia, è un duplicato
+        return None  # same volume and same model: it is not a pair, but a duplicate
     if same_model:
         return "volume"
     if same_volume:
@@ -465,10 +468,10 @@ def _kind(a: Prediction, b: Prediction) -> str | None:
 
 
 def pair_stats(preds: list[Prediction]) -> PairStats:
-    """Come `pairs`, ma restituisce anche cosa è stato escluso e perché.
+    """Like `pairs`, but also returns what was excluded and why.
 
-    NON stampa. NON accoppia predizioni di segmenti diversi: il pavimento si misura sulla
-    stessa superficie, e due segmenti diversi hanno mesh diverse.
+    Does NOT print. Does NOT pair predictions from different segments: the floor is measured
+    on the same surface, and two different segments have different meshes.
     """
     groups: dict[tuple[str, str], list[Prediction]] = defaultdict(list)
     for p in preds:
@@ -526,10 +529,10 @@ def pair_stats(preds: list[Prediction]) -> PairStats:
 
 
 def pairs(preds: list[Prediction]) -> list[Pair]:
-    """Tutte le coppie confrontabili, raggruppate per segmento. Esclude kind='both'.
+    """All comparable pairs, grouped by segment. Excludes kind='both'.
 
-    NON include le coppie su raster diversi (voxel o livello piramidale diversi): quelle
-    mappe hanno passi diversi e sovrapporle pixel a pixel misurerebbe il ricampionamento,
-    non il pavimento. Quante ne sono state escluse lo dice `pair_stats`.
+    Does NOT include pairs on different rasters (different voxel or pyramid level): those
+    maps have different steps, and overlaying them pixel for pixel would measure resampling,
+    not the floor. `pair_stats` reports how many were excluded.
     """
     return pair_stats(preds).pairs
