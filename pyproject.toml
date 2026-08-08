@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inkfloor"
+version = "0.1.0"
+description = "Measure the reproducibility floor of the Vesuvius Challenge ink detection pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Eugenio Nerelli" }]
+keywords = ["vesuvius-challenge", "ink-detection", "reproducibility", "herculaneum"]
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+# No torch, no zarr, no boto3. The tool has to run on a laptop with no GPU and no
+# credentials: the bucket is public and every request is anonymous.
+dependencies = [
+  "numpy>=1.24",
+  "tifffile>=2023.7.10",
+  "numcodecs>=0.11",
+  "imagecodecs>=2023.1.23",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+inkfloor = "inkfloor.cli:main"
+
+[tool.setuptools]
+packages = ["inkfloor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

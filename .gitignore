@@ -1,0 +1,9 @@
+# The cache mirrors S3 keys and grows to tens of GB. It never belongs in a commit.
+cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.DS_Store
+CONTRACTS.md
