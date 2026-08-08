@@ -85,8 +85,16 @@ _NAME_RX = re.compile(
 # modello resta un token `-tile<cifre>` o `-stride<cifre>`, il nome si scarta.
 _LEFTOVER_RX = re.compile(r"-(?:tile|stride)\d")
 
+# Sottocartella delle anteprime ridotte: stessa predizione, raster piu' piccolo.
+DOWNSAMPLED_DIR = "downsampled"
+
+# Estensioni immagine che NON sono .tif. Servono solo a distinguere un formato inatteso da
+# un file qualunque: non vengono mai lette, perche' il censimento legge solo nomi e dimensioni.
+_IMAGE_SUFFIXES = (".tiff", ".png", ".jpg", ".jpeg")
+
 # Motivi di scarto, in ordine di controllo.
 R_NOT_TIF = "not-a-tif"
+R_OTHER_IMAGE = "image-under-ink-detection-that-is-not-a-tif"
 R_NOT_INK = "not-under-ink-detection"
 R_NESTED = "nested-under-ink-detection"
 R_NAME = "name-not-recognised"
@@ -215,8 +223,20 @@ def parse_prediction(key: str, size_bytes: int) -> Prediction | None:
 
 
 def _parse_with_reason(key: str, size_bytes: int) -> tuple[Prediction | None, str | None]:
-    """Come `parse_prediction`, ma dice anche perché ha scartato. Uso interno al referto."""
+    """Come `parse_prediction`, ma dice anche perché ha scartato. Uso interno al referto.
+
+    Un file non-.tif sotto ink-detection viene distinto dalle anteprime: oggi ogni scarto
+    e' un .jpg dentro `downsampled/`, cioe' la stessa predizione ridotta, e ignorarlo e'
+    corretto. Ma il censimento sostiene una tesi esaustiva ("un solo segmento porta una
+    coppia di derivazioni"), e quella tesi diventerebbe falsa in silenzio il giorno in cui
+    venisse pubblicata una predizione con un'altra estensione. Quel caso ha un motivo di
+    scarto tutto suo, cosi' il referto lo puo' gridare invece di sommarlo alle anteprime.
+    """
     if not key.endswith(".tif"):
+        under_ink = f"/{INK_DIR}/" in key
+        is_preview = f"/{DOWNSAMPLED_DIR}/" in key
+        if under_ink and not is_preview and key.lower().endswith(_IMAGE_SUFFIXES):
+            return None, R_OTHER_IMAGE
         return None, R_NOT_TIF
 
     marker = f"/{INK_DIR}/"

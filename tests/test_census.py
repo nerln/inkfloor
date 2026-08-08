@@ -349,3 +349,35 @@ if __name__ == "__main__":  # esecuzione senza pytest
                 fails += 1
                 traceback.print_exc()
     raise SystemExit(1 if fails else 0)
+
+
+# ------------------------------------------------------- unexpected image formats
+
+
+def test_downsampled_preview_is_an_ordinary_skip():
+    """A .jpg preview is the same prediction at a smaller raster: not a missing prediction."""
+    from inkfloor import census
+
+    key = "PHerc0139/segments/seg1/ink-detection/downsampled/PHerc0139-x.jpg"
+    pred, reason = census._parse_with_reason(key, 1024)
+    assert pred is None
+    assert reason == census.R_NOT_TIF
+
+
+def test_unexpected_image_under_ink_detection_gets_its_own_reason():
+    """This is the case that would make the exhaustive claim silently false."""
+    from inkfloor import census
+
+    for suffix in (".tiff", ".png", ".jpeg"):
+        key = f"PHerc0139/segments/seg1/ink-detection/PHerc0139-x{suffix}"
+        pred, reason = census._parse_with_reason(key, 1024)
+        assert pred is None
+        assert reason == census.R_OTHER_IMAGE, f"{suffix} was folded into the previews"
+
+
+def test_non_image_outside_ink_detection_stays_an_ordinary_skip():
+    from inkfloor import census
+
+    pred, reason = census._parse_with_reason("PHerc0139/segments/seg1/mesh/x.tifxyz", 10)
+    assert pred is None
+    assert reason == census.R_NOT_TIF

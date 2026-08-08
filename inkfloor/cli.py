@@ -188,6 +188,17 @@ def cmd_census(args: argparse.Namespace) -> int:
         if isinstance(by_reason, dict):
             for reason, n in sorted(by_reason.items(), key=lambda kv: -kv[1]):
                 _say(f"  {reason}: {n:,}")
+            # An exhaustive claim ("one segment carries a floor pair") is only as good as the
+            # parser that decided what a prediction is. Every skip today is a downsampled
+            # preview; an image in an unexpected format would be a prediction this tool cannot
+            # see, so it must not be summed silently into the same total as the previews.
+            from inkfloor.census import R_OTHER_IMAGE
+
+            n_other = by_reason.get(R_OTHER_IMAGE, 0)
+            if n_other:
+                _warn(f"{n_other:,} image file(s) sit under ink-detection in a format this "
+                      f"census does not parse, outside the downsampled previews. Any count "
+                      f"below is a lower bound until they are classified.")
     _say(f"pairs:        {len(pairs):,} comparable")
     _say(f"  volume (the floor):  {by_kind.get('volume', 0):,}")
     _say(f"  model  (the anchor): {by_kind.get('model', 0):,}")
