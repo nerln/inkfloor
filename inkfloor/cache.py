@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,8 +20,30 @@ BUCKET = "vesuvius-challenge-open-data"
 HOST = f"https://{BUCKET}.s3.amazonaws.com"
 NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
-# On the external SSD by default: the corpus is large and must not fill the system disk.
-CACHE_ROOT = Path(os.environ.get("INKFLOOR_CACHE", "/Volumes/AppsAndFiles/dev/inkfloor/cache"))
+def _default_cache_root() -> Path:
+    """Where to keep downloaded predictions when nobody says otherwise.
+
+    This used to default to an absolute path on the author's external SSD, which was the
+    right choice for one machine and a broken one for every other: a corpus run is tens of
+    gigabytes, so the size concern is real, but hard-coding /Volumes/... shipped a tool that
+    writes to a disk only its author has. Found by installing the published package into a
+    clean virtualenv and reading the first line it printed.
+
+    The environment variable still wins, and is the answer when the system disk is too small:
+
+        INKFLOOR_CACHE=/Volumes/BigDisk/inkfloor inkfloor corpus --kind model
+    """
+    env = os.environ.get("INKFLOOR_CACHE")
+    if env:
+        return Path(env).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "inkfloor"
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".cache"
+    return base / "inkfloor"
+
+
+CACHE_ROOT = _default_cache_root()
 
 TIMEOUT = 300
 
