@@ -25,8 +25,18 @@ EXIT_ERROR = 1
 EXIT_REFUSED = 2
 
 
+#: With --json, stdout has to carry the JSON document and nothing else, or a caller doing
+#: `inkfloor corpus --json > out.json` gets a file that will not parse. Narration is still
+#: worth having during a run that downloads gigabytes, so it moves to stderr rather than
+#: disappearing. Found by using the tool: the first corpus run wrote 341 KB of unparseable
+#: output with the download plan sitting on top of the payload.
+_NARRATE_TO_STDERR = False
+
+
 def _say(*parts: object) -> None:
-    print(*parts, file=sys.stdout, flush=True)
+    # Resolved per call, not captured once: sys.stdout is replaced under test capture and
+    # by any caller that redirects, and a stream held from import time goes stale.
+    print(*parts, file=sys.stderr if _NARRATE_TO_STDERR else sys.stdout, flush=True)
 
 
 def _warn(*parts: object) -> None:
@@ -92,7 +102,7 @@ def _emit(floors, args: argparse.Namespace) -> None:
     _write(args.out_md, md, "markdown")
     _write(args.out_json, js, "json")
     if args.json:
-        _say(js)
+        print(js, file=sys.stdout, flush=True)
     elif not args.out_md:
         _say(md)
 
@@ -433,6 +443,8 @@ def main(argv: list[str] | None = None) -> int:
             setattr(args, name, None)
     if not hasattr(args, "q"):
         args.q = list(report.DEFAULT_QS)
+    global _NARRATE_TO_STDERR
+    _NARRATE_TO_STDERR = bool(getattr(args, "json", False))
     try:
         return int(args.func(args))
     except KeyboardInterrupt:
