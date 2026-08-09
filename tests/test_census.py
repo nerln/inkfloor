@@ -215,8 +215,8 @@ def test_nomi_incompleti_danno_none() -> None:
 
 
 def test_coda_storta_non_viene_assorbita_nel_modello() -> None:
-    """`-tile64` senza stride, o un suffisso dopo lo stride: il pezzo storto non deve finire
-    dentro il nome del modello lasciando tile/stride a None."""
+    """`-tile64` without stride, or a suffix after the stride: the crooked piece must not end
+    up inside the model name leaving tile/stride at None."""
     troncato = K_838_JULY.replace("-tile64-stride16.tif", "-tile64.tif")
     assert parse_prediction(troncato, SIZE_838_JULY) is None
 
@@ -225,7 +225,7 @@ def test_coda_storta_non_viene_assorbita_nel_modello() -> None:
 
 
 def test_incoerenza_col_path_da_none() -> None:
-    """Il nome dice un sample o un segmento diverso da quello del path: si scarta."""
+    """The name says a sample or a segment different from the one in the path: discarded."""
     sample_sbagliato = K_838_JULY.replace(
         "ink-detection/PHerc0172-", "ink-detection/PHerc0332-"
     )
@@ -239,7 +239,7 @@ def test_incoerenza_col_path_da_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# comparable e pairs
+# comparable and pairs
 # ---------------------------------------------------------------------------
 
 
@@ -248,8 +248,8 @@ def test_comparable_solo_su_stesso_raster() -> None:
     b = _p(K_839_NOV, SIZE_839_NOV)
     assert comparable(a, b)
 
-    c = _p(K_PARIS4_L1, SIZE_PARIS4_L1)  # 1.129um, L1  -> passo 2.258
-    d = _p(K_PARIS4_24, SIZE_PARIS4_24)  # 2.4um, livello ignoto
+    c = _p(K_PARIS4_L1, SIZE_PARIS4_L1)  # 1.129um, L1  -> step 2.258
+    d = _p(K_PARIS4_24, SIZE_PARIS4_24)  # 2.4um, unknown level
     assert not comparable(c, d)
 
 
@@ -264,7 +264,7 @@ def test_pairs_sul_2x2_da_due_volume_e_due_model() -> None:
     kinds = sorted(p.kind for p in got)
     assert kinds == ["model", "model", "volume", "volume"]
 
-    # kind="volume": stesso modello, volume diverso.
+    # kind="volume": same model, different volume.
     for p in got:
         if p.kind == "volume":
             assert p.a.model == p.b.model and p.a.volume != p.b.volume
@@ -273,7 +273,7 @@ def test_pairs_sul_2x2_da_due_volume_e_due_model() -> None:
 
     st = pair_stats(preds)
     assert st.n_candidate_pairs == 6
-    assert st.n_excluded_both == 2  # le due diagonali del 2x2
+    assert st.n_excluded_both == 2  # the two diagonals of the 2x2
     assert st.n_excluded_raster == 0
     assert st.n_excluded_duplicate == 0
     assert st.by_kind == {"volume": 2, "model": 2}
@@ -294,8 +294,8 @@ def test_pairs_esclude_both_e_raster_diverso() -> None:
     preds = [_p(K_PARIS4_L1, SIZE_PARIS4_L1), _p(K_PARIS4_24, SIZE_PARIS4_24)]
     st = pair_stats(preds)
     assert st.pairs == []
-    # Volume e modello sono entrambi diversi: il motivo di esclusione è "both", e la coppia
-    # non viene contata due volte anche se il raster differisce.
+    # Volume and model are both different: the exclusion reason is "both", and the pair is
+    # not counted twice even if the raster differs.
     assert st.n_excluded_both == 1
     assert st.n_excluded_raster == 0
 
@@ -328,16 +328,16 @@ def test_pair_e_deterministico_nell_ordine() -> None:
 
 
 def test_census_stats_non_tocca_la_rete() -> None:
-    """`census_stats()` è un referto, non un censimento: senza una corsa alle spalle è vuoto."""
+    """`census_stats()` is a report, not a census: with no run behind it, it is empty."""
     from inkfloor import census as mod
 
     got = mod.census_stats()
     assert isinstance(got, dict)
-    if got:  # se qualcuno ha già girato un census in questo processo, i conti tornano
+    if got:  # if someone already ran a census in this process, the counts add up
         assert got["keys_seen"] == got["kept"] + got["skipped"]
 
 
-if __name__ == "__main__":  # esecuzione senza pytest
+if __name__ == "__main__":  # run without pytest
     import traceback
 
     fails = 0
