@@ -25,7 +25,10 @@ matched 5% positive budget:
 The two derivations publish tifxyz meshes that decode to identical arrays, so the shift is
 not a re-flattening. Their 8 bit intensities are related by an affine remap,
 `A = 0.6154*B + 104.32` with `r = 0.99987`, and the pipeline clips at an absolute value of
-200 without normalising per volume.
+200 without normalising per volume. (That pair is the estimate published in the issue, from
+five chunks. This tool's own fit, over a wider z range and 10.44 Mvoxel, gives
+`A = 0.6153*B + 104.33` with `r = 0.99988`, which is what the sample report below prints. The
+two agree to the third decimal from disjoint samples, which is the point.)
 
 The issue also carries a correction: at q = 1% the tie bands of two of those four pairs are
 wider than the difference being discussed, so only the q = 5% row supports the comparison.
