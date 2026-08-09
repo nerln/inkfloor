@@ -484,8 +484,8 @@ def fit_intensity(
         z_offset=z_offset,
         r_by_offset=reported,
         note=(
-            f"{sel_note}; scansione z densa su {len(scan)} offset, massimo a {z_offset:+d} "
-            f"con r={peak:.5f} (un chunk sonda, sottocampionato 1/{_SCAN_STRIDE} in y,x)"
+            f"{sel_note}; dense z scan over {len(scan)} offsets, maximum at {z_offset:+d} "
+            f"with r={peak:.5f} (one probe chunk, subsampled 1/{_SCAN_STRIDE} in y and x)"
         ),
     )
 

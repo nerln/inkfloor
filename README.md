@@ -126,7 +126,7 @@ plan: census of PHerc0172
 
   to download now: 0 B
   of which already in cache: 0 B
-  cache: /Volumes/AppsAndFiles/dev/inkfloor/cache (9.3 MB on disk)
+  cache: ~/Library/Caches/inkfloor (9.3 MB on disk)
   note: census downloads no prediction file: it reads key names and sizes only. The listing is paginated at 1000 keys per request and a busy segment has tens of thousands of keys, so a full-bucket census takes minutes of requests.
 
 listing the bucket, this is metadata only and can take a few minutes ...
@@ -162,7 +162,7 @@ plan: floor PHerc0172 / 20251107110950-w064_20251107110950052_flatboi
 
   to download now: UNKNOWN until the listing. Sized steps: ~5.2 MB. Steps with no size yet: 2.
   of which already in cache: 0 B
-  cache: /Volumes/AppsAndFiles/dev/inkfloor/cache (0 B on disk)
+  cache: ~/Library/Caches/inkfloor (0 B on disk)
   note: Offline plan: sizes are nominal. Run without --dry-run for exact bytes, the listing phase prints them before the first fetch and downloads no payload.
 
 dry run: nothing was requested.
@@ -185,14 +185,14 @@ plan: floor PHerc0172 / 20251107110950-w064_20251107110950052_flatboi
 
   to download now: ~170.5 MB
   of which already in cache: 9.3 MB
-  cache: /Volumes/AppsAndFiles/dev/inkfloor/cache (9.3 MB on disk)
+  cache: ~/Library/Caches/inkfloor (9.3 MB on disk)
 ```
 
 Run it a second time and the same plan reads `0 B` to fetch against `165.4 MB` in cache. The
 run ends with what actually crossed the network, measured by watching the cache grow:
 
 ```
-cache grew by 165.4 MB (now 174.6 MB at /Volumes/AppsAndFiles/dev/inkfloor/cache)
+cache grew by 165.4 MB (now 174.6 MB at ~/Library/Caches/inkfloor)
 ```
 
 If the announced download is over `--max-download-mb` (default 1024) the run stops before
@@ -488,7 +488,7 @@ meaningless. Two checks run per segment:
 | `inkfloor/report.py` | one record per segment, the Markdown and JSON renderers, the byte plans |
 | `inkfloor/cli.py` | the three subcommands, and the only place that prints |
 
-Module contracts are in `CONTRACTS.md`. Tests: `.venv/bin/python -m pytest`.
+Tests: `python -m pytest`.
 
 ## License
 
