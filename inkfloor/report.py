@@ -376,7 +376,13 @@ def plan_corpus(
 ) -> DownloadPlan:
     """The plan for a corpus run. `segments` restricts it to the segments actually kept."""
     target = "all samples" if not samples else ", ".join(samples)
-    plan = DownloadPlan(title=f"corpus floor over {target}")
+    # Name what is actually being measured. The floor and the anchor are different quantities
+    # and the whole tool exists to keep them apart, so a plan header that says "floor" while
+    # fetching model pairs contradicts the point on its first line.
+    what = {frozenset({"volume"}): "floor", frozenset({"model"}): "anchor"}.get(
+        frozenset(kinds), "floor and anchor"
+    )
+    plan = DownloadPlan(title=f"corpus {what} over {target}")
 
     if preds is None:
         lo, hi = NOMINAL_PREDICTION_RANGE
