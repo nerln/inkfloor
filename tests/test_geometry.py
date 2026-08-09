@@ -174,7 +174,7 @@ def test_decode_chunk_order_f():
 
 
 def test_decode_chunk_wrong_size_raises():
-    """Un buffer della lunghezza sbagliata non deve diventare un array plausibile."""
+    """A buffer of the wrong length must not turn into a plausible array."""
     with pytest.raises(geometry.GeometryError):
         geometry._decode_chunk(_zarray(), b"\x00" * 63)
 
@@ -514,7 +514,7 @@ def test_compare_meshes_none_when_derivation_missing(monkeypatch):
 
 
 def test_compare_meshes_meta_difference_does_not_flip_identical(monkeypatch):
-    """Il sidecar puo' differire su uuid o precisione della scala: non e' la geometria."""
+    """The sidecar may differ on uuid or scale precision: that is not the geometry."""
     rng = np.random.default_rng(6)
     arrays = {ch: rng.random((10, 10)).astype(np.float32) for ch in "xyz"}
     _install_mesh(

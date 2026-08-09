@@ -1,9 +1,9 @@
-"""Test di `inkfloor.census`, senza rete.
+"""Tests for `inkfloor.census`, without network.
 
-Ogni stringa qui sotto è una key reale, copiata da un ListObjectsV2 sul bucket pubblico il
-2026-08-08. Niente nomi inventati: un test su nomi inventati verifica il parser contro se
-stesso. Le dimensioni in byte sono quelle vere degli oggetti, così i Prediction costruiti nei
-test sono identici a quelli che produrrebbe `census()`.
+Every string below is a real key, copied from a ListObjectsV2 on the public bucket on
+2026-08-08. No invented names: a test on invented names checks the parser against itself.
+The sizes in bytes are the real ones of the objects, so the Predictions built in the tests
+are identical to the ones `census()` would produce.
 """
 
 from __future__ import annotations
@@ -23,13 +23,13 @@ from inkfloor.census import (  # noqa: E402
 )
 
 # ---------------------------------------------------------------------------
-# Key reali
+# Real keys
 # ---------------------------------------------------------------------------
 
 SEG_2X2 = "PHerc0172/segments/20251107110950-w064_20251107110950052_flatboi"
 INK_2X2 = f"{SEG_2X2}/ink-detection"
 
-# Il 2x2 completo: due volumi (…838, …839) per due modelli (july_retreat, november19).
+# The full 2x2: two volumes (...838, ...839) for two models (july_retreat, november19).
 K_838_JULY = (
     f"{INK_2X2}/PHerc0172-20251107110950-7.91um-53keV-volume-20241024131838"
     "-20250713185324-timesformer_scroll5_july_retreat-tile64-stride16.tif"
@@ -51,7 +51,7 @@ SIZE_838_NOV = 46337592
 SIZE_839_JULY = 33840118
 SIZE_839_NOV = 48283061
 
-# Con distanza sorgente-oggetto E livello piramidale, e un nome di modello pieno di trattini.
+# With source-object distance AND pyramid level, and a model name full of hyphens.
 K_L1 = (
     "PHerc0139/segments/20250108000000-w025_2025010863/ink-detection/"
     "PHerc0139-20250108000000-1.129um-0.22m-59keV-volume-20260413113053-L1"
@@ -59,8 +59,8 @@ K_L1 = (
 )
 SIZE_L1 = 36667210
 
-# Lo stesso modello `mrg20736-1um-s1z2` senza livello nel nome, accanto a `new_canon`:
-# stesso volume, stesso raster, modelli diversi. È una coppia kind="model".
+# The same model `mrg20736-1um-s1z2` with no level in the name, next to `new_canon`:
+# same volume, same raster, different models. It is a kind="model" pair.
 SEG_500P2 = "PHerc0500P2/segments/20250628074500-500P2_front"
 K_500P2_CANON = (
     f"{SEG_500P2}/ink-detection/PHerc0500P2-20250628074500-2.215um-0.4m-111keV"
@@ -74,7 +74,7 @@ K_500P2_MRG = (
 SIZE_500P2_CANON = 20507064
 SIZE_500P2_MRG = 43698867
 
-# Segmento con due predizioni che differiscono in tutto: volume, modello e raster.
+# Segment with two predictions that differ in everything: volume, model and raster.
 SEG_PARIS4 = "PHercParis4/segments/20230702185753"
 K_PARIS4_L1 = (
     f"{SEG_PARIS4}/ink-detection/PHercParis4-20230702185753-1.129um-0.23m-78keV"
@@ -88,7 +88,7 @@ K_PARIS4_24 = (
 SIZE_PARIS4_L1 = 233574753
 SIZE_PARIS4_24 = 166927520
 
-# Key reali che DEVONO dare None.
+# Real keys that MUST give None.
 K_DOWNSAMPLED = (
     f"{INK_2X2}/downsampled/PHerc0172-20251107110950-7.91um-53keV-volume-20241024131838"
     "-20250713185324-timesformer_scroll5_july_retreat-tile64-stride16-ds8.jpg"
@@ -105,7 +105,7 @@ def _p(key: str, size: int) -> Prediction:
 
 
 # ---------------------------------------------------------------------------
-# parse_prediction: i campi giusti
+# parse_prediction: the right fields
 # ---------------------------------------------------------------------------
 
 
@@ -122,7 +122,7 @@ def test_parse_schema_senza_distanza_ne_livello() -> None:
     assert p.size_bytes == SIZE_838_JULY
     assert p.kev == 53.0
     assert p.dist_m is None
-    # Il livello non è nel nome: resta ignoto, non diventa 0.
+    # The level is not in the name: it stays unknown, it does not become 0.
     assert p.level is None
     assert p.step_um is None
     assert p.segment_prefix == SEG_2X2 + "/"
@@ -133,7 +133,7 @@ def test_parse_schema_con_distanza_e_livello() -> None:
     assert p.sample == "PHerc0139"
     assert p.segment == "20250108000000-w025_2025010863"
     assert p.volume == "20260413113053"
-    # Il livello sta fra volume e modello e non deve finire nel nome del modello.
+    # The level sits between volume and model and must not end up in the model name.
     assert p.level == 1
     assert p.model == "20260709123958-mrg20736-1um-s1z2"
     assert p.voxel_um == 1.129
@@ -141,12 +141,12 @@ def test_parse_schema_con_distanza_e_livello() -> None:
     assert p.kev == 59.0
     assert p.tile == 256
     assert p.stride == 128
-    # Passo raster effettivo: voxel * 2^L.
+    # Effective raster step: voxel * 2^L.
     assert p.step_um == 2.258
 
 
 def test_parse_modello_con_trattini_senza_livello() -> None:
-    """Lo stesso modello del test precedente, ma in un nome che non dichiara il livello."""
+    """The same model as the previous test, but in a name that does not declare the level."""
     p = _p(K_500P2_MRG, SIZE_500P2_MRG)
     assert p.model == "20260709123958-mrg20736-1um-s1z2"
     assert p.level is None
@@ -157,7 +157,7 @@ def test_parse_modello_con_trattini_senza_livello() -> None:
 
 
 def test_parse_voxel_non_confuso_con_1um_del_nome_modello() -> None:
-    """`mrg20736-1um-s1z2` contiene `1um`: il voxel deve restare quello del nome file."""
+    """`mrg20736-1um-s1z2` contains `1um`: the voxel must stay the one from the file name."""
     assert _p(K_PARIS4_L1, SIZE_PARIS4_L1).voxel_um == 1.129
     assert _p(K_PARIS4_24, SIZE_PARIS4_24).voxel_um == 2.4
 
@@ -178,12 +178,12 @@ def test_parse_tutte_e_quattro_le_predizioni_del_2x2() -> None:
 
 
 # ---------------------------------------------------------------------------
-# parse_prediction: i None
+# parse_prediction: the Nones
 # ---------------------------------------------------------------------------
 
 
 def test_anteprima_downsampled_da_none() -> None:
-    """L'anteprima ridotta 8x ha lo stesso nome più `-ds8.jpg`: non è la predizione."""
+    """The 8x reduced preview has the same name plus `-ds8.jpg`: it is not the prediction."""
     assert parse_prediction(K_DOWNSAMPLED, 595229) is None
 
 
@@ -196,18 +196,18 @@ def test_key_non_ink_danno_none() -> None:
 def test_nomi_incompleti_danno_none() -> None:
     base = f"{INK_2X2}/"
     casi = [
-        # senza il blocco `volume-<id>`
+        # without the `volume-<id>` block
         "PHerc0172-20251107110950-7.91um-53keV-20250713185324-timesformer.tif",
-        # id volume troppo corto
+        # volume id too short
         "PHerc0172-20251107110950-7.91um-53keV-volume-2024102413-20250713185324-t.tif",
-        # modello senza timestamp davanti
+        # model without a timestamp in front
         "PHerc0172-20251107110950-7.91um-53keV-volume-20241024131838-timesformer.tif",
-        # senza voxel
+        # without voxel
         "PHerc0172-20251107110950-53keV-volume-20241024131838-20250713185324-t.tif",
-        # tile senza stride
+        # tile without stride
         "PHerc0172-20251107110950-7.91um-53keV-volume-20241024131838"
         "-20250713185324-timesformer-tile64.tif",
-        # senza timestamp del segmento
+        # without the segment timestamp
         "PHerc0172-7.91um-53keV-volume-20241024131838-20250713185324-timesformer.tif",
     ]
     for nome in casi:
