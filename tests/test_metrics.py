@@ -484,7 +484,7 @@ class TestTies(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------------------
-# spearman
+# the selection rule: above threshold first, then ties by ascending index
 # ---------------------------------------------------------------------------------------
 
 
@@ -589,6 +589,7 @@ class TestSelectionRule(unittest.TestCase):
         # saturation, not an agreement between the two maps.
         self.assertAlmostEqual(tb.iou_min, 1.0 / 9.0, places=15)
 
+# spearman
 
 class TestSpearman(unittest.TestCase):
     def test_known_value_without_ties(self):
@@ -698,9 +699,9 @@ class TestBestShift(unittest.TestCase):
         v = all_valid(a.shape)
         dy, dx, best = best_shift_iou(a, b, v, 0.05, radius=4)
         zero = delta_at_q(a, b, v, 0.05).iou
-        self.assertNotEqual((dy, dx), (0, 0))  # il massimo cade fuori dallo zero
+        self.assertNotEqual((dy, dx), (0, 0))  # the maximum falls away from zero
         self.assertGreater(best, zero)
-        self.assertLess(best - zero, 0.10)  # ma il guadagno e' minimo: e' rumore, non allineamento
+        self.assertLess(best - zero, 0.10)  # but the gain is tiny: it is noise, not alignment
         self.assertLess(best, 0.20)
 
     def test_negative_radius_raises(self):
