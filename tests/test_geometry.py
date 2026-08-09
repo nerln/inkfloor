@@ -1,11 +1,11 @@
-"""Test di `inkfloor.geometry`.
+"""Tests for `inkfloor.geometry`.
 
-La parte logica non tocca la rete: i volumi e le mesh sono finti, costruiti in memoria, e
-la relazione affine fra i due volumi e' nota per costruzione, cosi' un errore nel fit si
-vede come uno scostamento da un numero che sappiamo.
+The logic part does not touch the network: the volumes and the meshes are fake, built in
+memory, and the affine relation between the two volumes is known by construction, so an
+error in the fit shows up as a departure from a number we know.
 
-I due test che riproducono le misure sul corpus vero sono marcati e saltati per default.
-Per eseguirli:
+The two tests that reproduce the measurements on the real corpus are marked and skipped by
+default. To run them:
 
     INKFLOOR_NETWORK=1 .venv/bin/python -m pytest tests/test_geometry.py -v
 """
@@ -25,15 +25,15 @@ from inkfloor import cache, geometry
 
 requires_network = pytest.mark.skipif(
     os.environ.get("INKFLOOR_NETWORK") != "1",
-    reason="tocca la rete: esegui con INKFLOOR_NETWORK=1",
+    reason="touches the network: run with INKFLOOR_NETWORK=1",
 )
 
 
-# --------------------------------------------------------------------- finto bucket S3
+# ---------------------------------------------------------------------- fake S3 bucket
 
 
 class FakeBucket:
-    """Un bucket in memoria, con la stessa superficie di `cache` che geometry usa."""
+    """An in-memory bucket, with the same surface as the `cache` that geometry uses."""
 
     def __init__(self) -> None:
         self.blobs: dict[str, bytes] = {}
@@ -50,11 +50,11 @@ class FakeBucket:
         monkeypatch.setattr(geometry.cache, "list_prefixes", self.list_prefixes)
         monkeypatch.setattr(geometry.cache, "fetch", self._no_fetch)
 
-    # --- superficie di cache
+    # --- cache surface
 
     def get_bytes(self, key: str, start: int | None = None, end: int | None = None) -> bytes:
         if key not in self.blobs:
-            raise cache.FetchError(f"HTTP 404 su {key}")
+            raise cache.FetchError(f"HTTP 404 for {key}")
         data = self.blobs[key]
         if start is None:
             self.gets.append(key)
@@ -77,8 +77,8 @@ class FakeBucket:
                     out.add(prefix + rest.split("/", 1)[0] + "/")
         return sorted(out)
 
-    def _no_fetch(self, key: str):  # pragma: no cover - solo per accorgersi se serve
-        raise AssertionError(f"fetch() inattesa su {key}")
+    def _no_fetch(self, key: str):  # pragma: no cover - only to notice if it is needed
+        raise AssertionError(f"unexpected fetch() for {key}")
 
 
 def make_volume(
@@ -90,10 +90,10 @@ def make_volume(
     *,
     skip: set[tuple[int, int, int]] = frozenset(),
 ) -> None:
-    """Scrive `data` come zarr v2 nel finto bucket, con dimension_separator "/".
+    """Write `data` as zarr v2 into the fake bucket, with dimension_separator "/".
 
-    `skip` elenca i chunk da NON scrivere: in zarr valgono `fill_value`, ed e' cosi' che il
-    corpus vero rappresenta le zone mascherate.
+    `skip` lists the chunks NOT to write: in zarr they count as `fill_value`, and that is how
+    the real corpus represents the masked regions.
     """
     bucket.put(
         f"{prefix}/0/.zarray",
@@ -132,7 +132,7 @@ def make_volume(
 BLOSC = {"id": "blosc", "cname": "zstd", "clevel": 3, "shuffle": 1, "blocksize": 0}
 
 
-# --------------------------------------------------------------- decodifica dei chunk
+# --------------------------------------------------------------------- chunk decoding
 
 
 def _zarray(**over) -> geometry._ZArray:
@@ -150,7 +150,7 @@ def _zarray(**over) -> geometry._ZArray:
 
 
 def test_decode_chunk_raw_bytes():
-    """Compressor null: i byte grezzi vanno riletti nell'ordine in cui stanno."""
+    """Null compressor: the raw bytes have to be read back in the order they sit in."""
     block = (np.arange(64, dtype=np.uint8) * 3).reshape(4, 4, 4)
     got = geometry._decode_chunk(_zarray(), block.tobytes(order="C"))
     assert got.shape == (4, 4, 4)
@@ -158,7 +158,7 @@ def test_decode_chunk_raw_bytes():
 
 
 def test_decode_chunk_blosc():
-    """Blosc: l'header porta i parametri, non serve rileggerli dal .zarray."""
+    """Blosc: the header carries the parameters, no need to read them back from the .zarray."""
     rng = np.random.default_rng(1)
     block = rng.integers(0, 256, size=(4, 4, 4), dtype=np.uint8)
     raw = numcodecs.get_codec(BLOSC).encode(block.tobytes(order="C"))
@@ -205,7 +205,7 @@ def test_read_zarray_rejects_unsupported(monkeypatch):
             geometry._read_zarray("w")
 
 
-# ------------------------------------------------------------------------- statistiche
+# -------------------------------------------------------------------------- statistics
 
 
 @pytest.mark.parametrize("n", [1, 2, 3, 10, 11, 257])
@@ -228,7 +228,7 @@ def test_tail_frac():
 
 
 def test_accumulator_matches_numpy_and_is_order_independent():
-    """Le somme sono interi esatti: due ordini di arrivo devono dare lo stesso numero."""
+    """The sums are exact integers: two arrival orders have to give the same number."""
     rng = np.random.default_rng(2)
     a = rng.integers(0, 256, size=5000, dtype=np.uint8)
     b = rng.integers(1, 256, size=5000, dtype=np.uint8)
@@ -248,7 +248,7 @@ def test_accumulator_matches_numpy_and_is_order_independent():
     assert got["median_a"] == pytest.approx(float(np.median(a)))
 
 
-# --------------------------------------------------------------------- fit su sintetico
+# ---------------------------------------------------------------- fit on synthetic data
 
 CH = (32, 32, 32)
 SHAPE = (32 * 6, 32 * 4, 32 * 4)
@@ -257,11 +257,11 @@ TRUE_INTERCEPT = 104.32
 
 
 def _affine_pair(seed: int = 3, z_shift: int = 0) -> tuple[np.ndarray, np.ndarray]:
-    """B casuale in [1, 240], A = TRUE_SLOPE*B + TRUE_INTERCEPT arrotondato.
+    """Random B in [1, 240], A = TRUE_SLOPE*B + TRUE_INTERCEPT rounded.
 
-    Con `z_shift = k`, A(z) e' derivato da B(z + k): il codice deve trovare `z_offset = k`.
-    Il range di B tiene A dentro [105, 253], cosi' nessun valore satura in uint8 e la
-    relazione resta affine su tutto il dominio.
+    With `z_shift = k`, A(z) is derived from B(z + k): the code has to find `z_offset = k`.
+    The range of B keeps A inside [105, 253], so no value saturates in uint8 and the relation
+    stays affine over the whole domain.
     """
     rng = np.random.default_rng(seed)
     pad = abs(z_shift)
@@ -289,7 +289,7 @@ def _install_pair(
 
 
 def test_fit_recovers_known_affine(monkeypatch):
-    """Il numero che conta: se la relazione e' nota, il fit la ritrova."""
+    """The number that counts: if the relation is known, the fit finds it again."""
     a, b = _affine_pair()
     _install_pair(monkeypatch, a, b)
     fit = geometry.fit_intensity("S", "va", "vb", n_chunks=3, seed=0)
@@ -304,7 +304,7 @@ def test_fit_recovers_known_affine(monkeypatch):
 
 
 def test_fit_is_reproducible_and_seed_changes_chunks(monkeypatch):
-    """Stesso seed, stessi chunk. Seed diverso, chunk diversi e stessa stima."""
+    """Same seed, same chunks. Different seed, different chunks and the same estimate."""
     a, b = _affine_pair()
     _install_pair(monkeypatch, a, b)
     one = geometry.fit_intensity("S", "va", "vb", n_chunks=3, seed=0)
@@ -318,17 +318,17 @@ def test_fit_is_reproducible_and_seed_changes_chunks(monkeypatch):
 
 
 def test_fit_finds_z_offset(monkeypatch):
-    """Requisito: l'allineamento in z va misurato, non assunto."""
+    """Requirement: the alignment in z has to be measured, not assumed."""
     a, b = _affine_pair(z_shift=3)
     _install_pair(monkeypatch, a, b)
     fit = geometry.fit_intensity("S", "va", "vb", n_chunks=3, seed=0)
     assert fit is not None
     assert fit.z_offset == 3
-    # Il picco e' stretto: a offset zero la correlazione deve essere quasi nulla.
+    # The peak is narrow: at offset zero the correlation must be nearly nil.
     scan = dict(fit.r_by_offset)
     assert scan[3] > 0.99
     assert abs(scan[0]) < 0.1
-    # E il fit deve essere quello dell'offset giusto, non quello dei voxel disallineati.
+    # And the fit must be the one at the right offset, not the one on the misaligned voxels.
     assert fit.slope == pytest.approx(TRUE_SLOPE, abs=2e-3)
     assert fit.intercept == pytest.approx(TRUE_INTERCEPT, abs=2e-2)
     assert fit.r > 0.999
@@ -344,7 +344,7 @@ def test_fit_returns_none_on_yx_mismatch(monkeypatch):
 
 
 def test_fit_tolerates_different_z_extent(monkeypatch):
-    """Come nel corpus: i due volumi hanno z diverso ma partono dallo stesso voxel."""
+    """As in the corpus: the two volumes have a different z but start from the same voxel."""
     a, b = _affine_pair()
     bucket = FakeBucket()
     bucket.install(monkeypatch)
@@ -363,7 +363,7 @@ def test_fit_returns_none_when_volume_absent(monkeypatch):
 
 
 def test_fit_skips_chunks_missing_in_one_volume(monkeypatch):
-    """Nel corpus vero ~16% dei chunk presenti in A manca in B: non vanno usati."""
+    """In the real corpus ~16% of the chunks present in A are missing in B: do not use them."""
     a, b = _affine_pair()
     absent = {(zi, yi, xi) for zi in range(1, 5) for yi in range(1, 3) for xi in (1,)}
     bucket = _install_pair(monkeypatch, a, b, skip_b=absent)
@@ -374,7 +374,7 @@ def test_fit_skips_chunks_missing_in_one_volume(monkeypatch):
 
 
 def test_fit_probes_presence_before_downloading(monkeypatch):
-    """Un chunk assente in B non deve costare il download del chunk di A."""
+    """A chunk absent in B must not cost the download of the chunk of A."""
     a, b = _affine_pair()
     absent = {(zi, yi, xi) for zi in range(6) for yi in range(4) for xi in range(4)} - {
         (2, 2, 2), (3, 1, 2), (4, 2, 1), (1, 1, 1), (2, 1, 1), (3, 2, 2)
@@ -383,14 +383,14 @@ def test_fit_probes_presence_before_downloading(monkeypatch):
     fit = geometry.fit_intensity("S", "va", "vb", n_chunks=2, seed=0)
     assert fit is not None
     a_full_gets = [k for k in bucket.gets if "va-" in k and k.count("/") == 6]
-    # Ogni chunk di A scaricato per intero deve corrispondere a un chunk poi usato o
-    # scartato per sparsita', non a uno che si sapeva gia' assente in B.
+    # Every chunk of A downloaded in full must correspond to a chunk later used or discarded
+    # for sparsity, not to one already known to be absent in B.
     assert len(a_full_gets) <= len(fit.chunks_used) + 1
     assert len(bucket.range_gets) > len(a_full_gets)
 
 
 def test_fit_returns_none_when_nothing_overlaps(monkeypatch):
-    """Nessun chunk in comune: None, non una retta stimata su niente."""
+    """No chunk in common: None, not a line estimated on nothing."""
     a, b = _affine_pair()
     everything = {(zi, yi, xi) for zi in range(6) for yi in range(4) for xi in range(4)}
     _install_pair(monkeypatch, a, b, skip_b=everything)
@@ -398,7 +398,7 @@ def test_fit_returns_none_when_nothing_overlaps(monkeypatch):
 
 
 def test_fit_clip_and_median_are_on_the_common_mask(monkeypatch):
-    """Mediane e frazioni al tetto sono calcolate sui voxel validi in entrambi i volumi."""
+    """Medians and ceiling fractions are computed on the voxels valid in both volumes."""
     a, b = _affine_pair()
     _install_pair(monkeypatch, a, b)
     fit = geometry.fit_intensity("S", "va", "vb", n_chunks=2, seed=0)
@@ -406,7 +406,7 @@ def test_fit_clip_and_median_are_on_the_common_mask(monkeypatch):
     zi, yi, xi = fit.chunks_used[0]
     sl = (slice(zi * 32, zi * 32 + 32), slice(yi * 32, yi * 32 + 32), slice(xi * 32, xi * 32 + 32))
     mask = (a[sl] > 0) & (b[sl] > 0)
-    # Un solo chunk non basta per l'aggregato, ma l'ordine di grandezza deve tornare.
+    # One chunk alone is not enough for the aggregate, but the order of magnitude must match.
     assert fit.median_a == pytest.approx(float(np.median(a[sl][mask])), abs=2.0)
     assert fit.clip_frac_a == pytest.approx(float((a[sl][mask] >= 200).mean()), abs=0.02)
     assert fit.clip_frac_b == pytest.approx(float((b[sl][mask] >= 200).mean()), abs=0.02)
@@ -449,7 +449,7 @@ def _install_mesh(
 
     def fake_fetch(key: str):
         if key not in paths:
-            raise cache.FetchError(f"HTTP 404 su {key}")
+            raise cache.FetchError(f"HTTP 404 for {key}")
         return io.BytesIO(paths[key])
 
     monkeypatch.setattr(geometry.cache, "get_bytes", bucket.get_bytes)
@@ -460,7 +460,7 @@ def _install_mesh(
 
 
 def test_compare_meshes_compares_arrays_not_bytes(monkeypatch):
-    """La trappola: stessi valori, file di dimensione molto diversa."""
+    """The trap: same values, files of very different size."""
     rng = np.random.default_rng(4)
     arrays = {ch: rng.random((40, 60)).astype(np.float32) * 1000 for ch in "xyz"}
     bucket, seg = _install_mesh(monkeypatch, arrays, arrays)
@@ -498,7 +498,7 @@ def test_compare_meshes_shape_mismatch(monkeypatch):
     assert check.identical is False
     assert check.shape_a == (20, 30) and check.shape_b == (20, 31)
     assert all(np.isinf(v) for v in check.max_abs_diff.values())
-    assert "forme diverse" in check.note
+    assert "different shapes" in check.note
 
 
 def test_compare_meshes_none_when_channel_missing(monkeypatch):
@@ -530,14 +530,14 @@ def test_compare_meshes_meta_difference_does_not_flip_identical(monkeypatch):
 
 
 def test_compare_meshes_ignores_intermediate_dirs(monkeypatch):
-    """Sotto mesh/ ci sono anche le tifxyz intermedie: non sono derivazioni di un volume."""
+    """Under mesh/ there are also the intermediate tifxyz: not derivations of a volume."""
     arrays = {ch: np.zeros((6, 6), np.float32) for ch in "xyz"}
     _install_mesh(monkeypatch, arrays, arrays)
     assert geometry._find_tifxyz("P/segments/SEG", "VA").endswith("T-on-VA-7.91um.tifxyz")
     assert geometry._find_tifxyz("P/segments/SEG", "tifxyz_flattened") is None
 
 
-# ------------------------------------------------------------------- corpus, con rete
+# --------------------------------------------------------------- corpus, with network
 
 SEGMENT = "PHerc0172/segments/20251107110950-w064_20251107110950052_flatboi"
 VOL_A = "20241024131838"
@@ -546,7 +546,7 @@ VOL_B = "20241024131839"
 
 @requires_network
 def test_corpus_mesh_is_identical():
-    """Misura 1: shape (671, 747) e maxabsdiff 0 su x, y, z."""
+    """Measurement 1: shape (671, 747) and maxabsdiff 0 on x, y, z."""
     check = geometry.compare_meshes(SEGMENT, VOL_A, VOL_B)
     assert check is not None
     assert check.shape_a == check.shape_b == (671, 747)
@@ -556,7 +556,7 @@ def test_corpus_mesh_is_identical():
 
 @requires_network
 def test_corpus_intensity_fit():
-    """Misura 2: A = 0.6154*B + 104.32 con r = 0.9999, e allineamento in z a offset 0."""
+    """Measurement 2: A = 0.6154*B + 104.32 with r = 0.9999, and z alignment at offset 0."""
     fit = geometry.fit_intensity("PHerc0172", VOL_A, VOL_B, n_chunks=4, seed=0)
     assert fit is not None
     assert fit.z_offset == 0
@@ -569,4 +569,4 @@ def test_corpus_intensity_fit():
     assert len(fit.chunks_used) == 4
     scan = dict(fit.r_by_offset)
     assert scan[0] > 0.99
-    assert scan[1] < 0.99   # il picco e' largo un voxel
+    assert scan[1] < 0.99   # the peak is one voxel wide

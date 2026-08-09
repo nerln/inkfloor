@@ -121,7 +121,7 @@ def compare_meshes(segment_prefix: str, vol_a: str, vol_b: str) -> MeshCheck | N
     if shape_a != shape_b:
         diffs = {ch: float("inf") for ch in CHANNELS}
         identical = False
-        notes.append(f"forme diverse {shape_a} contro {shape_b}: confronto per voxel non tentato")
+        notes.append(f"different shapes {shape_a} against {shape_b}: no voxel comparison attempted")
     else:
         diffs = {}
         for ch, (a, b) in arrays.items():
