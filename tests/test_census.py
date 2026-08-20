@@ -9,6 +9,7 @@ are identical to the ones `census()` would produce.
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -253,6 +254,26 @@ def test_comparable_solo_su_stesso_raster() -> None:
     assert not comparable(c, d)
 
 
+def test_comparable_requires_the_full_recorded_inference_contract() -> None:
+    a = _p(K_838_JULY, SIZE_838_JULY)
+    b = _p(K_839_JULY, SIZE_839_JULY)
+    assert comparable(a, b)
+
+    changed = (
+        replace(b, tile=128),
+        replace(b, stride=32),
+        replace(b, kev=54.0),
+        replace(b, dist_m=0.23),
+        replace(b, level=1),
+        replace(b, voxel_um=7.92),
+    )
+    assert all(not comparable(a, candidate) for candidate in changed)
+
+    # Missing provenance is not treated as equal to a recorded value.
+    assert not comparable(a, replace(b, kev=None))
+    assert not comparable(a, replace(b, tile=None, stride=None))
+
+
 def test_pairs_sul_2x2_da_due_volume_e_due_model() -> None:
     preds = [
         _p(K_838_JULY, SIZE_838_JULY),
@@ -381,3 +402,35 @@ def test_non_image_outside_ink_detection_stays_an_ordinary_skip():
     pred, reason = census._parse_with_reason("PHerc0139/segments/seg1/mesh/x.tifxyz", 10)
     assert pred is None
     assert reason == census.R_NOT_TIF
+
+
+def test_census_descends_through_arbitrarily_nested_containers(monkeypatch):
+    """A future layout can add containers without making its predictions invisible."""
+    from inkfloor import census
+
+    root = "PHerc0172/segments/"
+    raw = root + "raw/"
+    year = raw + "2026/"
+    batch = year + "batch-a/"
+    segment = batch + "20251107110950-w064_20251107110950052_flatboi/"
+    tree = {
+        root: [raw],
+        raw: [year],
+        year: [batch],
+        batch: [segment],
+        segment: [segment + "mesh/", segment + "ink-detection/"],
+    }
+    expected = segment + "ink-detection/" + K_838_JULY.rsplit("/", 1)[-1]
+
+    monkeypatch.setattr(census.cache, "list_prefixes", lambda prefix: tree.get(prefix, []))
+    monkeypatch.setattr(
+        census.cache,
+        "list_keys",
+        lambda prefix: [(expected, SIZE_838_JULY)]
+        if prefix == segment + "ink-detection/"
+        else [],
+    )
+
+    keys, n_dirs = census._ink_keys_for_sample("PHerc0172")
+    assert keys == [(expected, SIZE_838_JULY)]
+    assert n_dirs == 1

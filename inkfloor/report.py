@@ -149,16 +149,19 @@ def cached_path(key: str) -> Path:
     return cache.CACHE_ROOT / key
 
 
-def is_cached(key: str) -> bool:
+def is_cached(key: str, expected_size: int | None = None) -> bool:
+    """Whether `key` is present and, when known, has the listed object size."""
     p = cached_path(key)
-    return p.exists() and p.stat().st_size > 0
+    if not p.exists() or p.stat().st_size <= 0:
+        return False
+    return expected_size is None or p.stat().st_size == expected_size
 
 
 def _split_cached(keys_sizes: Sequence[tuple[str, int]]) -> tuple[int, int, int]:
     """(n_to_fetch, bytes_to_fetch, bytes_already_local) for a list of (key, size)."""
     new_n = new_b = have_b = 0
     for key, size in keys_sizes:
-        if is_cached(key):
+        if is_cached(key, size):
             have_b += size
         else:
             new_n += 1
@@ -567,7 +570,7 @@ def segment_prefix(preds: Sequence[Prediction]) -> str:
     return f"{p.sample}/segments/{p.segment}/"
 
 
-def load_map(key: str) -> np.ndarray:
+def load_map(key: str, *, expected_size: int | None = None) -> np.ndarray:
     """Fetch a published prediction and decode it to a 2D array.
 
     Does not rescale, does not normalise and does not touch the dtype: the whole point of
@@ -576,7 +579,7 @@ def load_map(key: str) -> np.ndarray:
     """
     import numpy as np
 
-    path = cache.fetch(key)
+    path = cache.fetch(key, expected_size=expected_size)
     low = key.lower()
     if low.endswith((".tif", ".tiff")):
         import tifffile
@@ -648,7 +651,11 @@ def floor_for_segment(
         for pred in (pair.a, pair.b):
             if pred.key not in used_keys:
                 used_keys.append(pred.key)
-    maps = {k: load_map(k) for k in used_keys}
+    by_key = {p.key: p for p in seg_preds}
+    maps = {
+        key: load_map(key, expected_size=by_key[key].size_bytes)
+        for key in used_keys
+    }
     valid = metrics.common_valid([maps[k] for k in used_keys]) if maps else None
 
     def deltas(pair: Pair) -> dict[float, Delta]:
@@ -1139,7 +1146,8 @@ def _intensity_line(fit: IntensityFit | None) -> str:
     )
     line = (
         f"- intensity: A = {slope}*B + {intercept} (r = {r}, n = {n} voxels), "
-        f"median {med_a} vs {med_b}, at or above the clip ceiling 200: {clip_a} vs {clip_b}"
+        f"median {med_a} vs {med_b}; among sampled voxels positive in both volumes, at or "
+        f"above the clip ceiling 200: {clip_a} vs {clip_b}"
     )
     z = _i(_g(fit, "z_offset"))
     if z is not None:
@@ -1231,10 +1239,11 @@ HEADER_NOTE = (
     "the same number of positives k on each side, so a difference in calibration is not read "
     "as a difference in placement. 0 means the two maps put ink in the same pixels, 1 means "
     "they are disjoint.\n\n"
-    "**Floor** = same model, two derivations of the same scan. **Anchor** = same derivation, "
-    "two models. The anchor is the difference the community already treats as real, so it is "
-    "the scale the floor is read against. A floor near its anchor is a measurement, not an "
-    "explanation: inkfloor does not establish a cause.\n\n"
+    "**Floor** = the observed disagreement for the same model on two derivations of one scan. "
+    "It is a label, not a statistical lower bound. **Anchor** = the observed disagreement for "
+    "two named models on one derivation; it is context from those model pairs, not a population "
+    "estimate for arbitrary checkpoint changes. A floor near its anchor is a measurement, not "
+    "an explanation: inkfloor does not establish a cause.\n\n"
     "**How to read a Δ cell.** Each one is `Δ [low, high]`, where the bracket is the exact "
     "interval the Δ can take over every admissible tie-break, mirrored onto Δ from the IoU "
     "bounds that `metrics.tie_bounds` returns. Published maps are 8 bit, so the top-q% cut "
@@ -1246,7 +1255,8 @@ HEADER_NOTE = (
     "case can print a Δ of 0.000, which looks like the best possible result and is worth "
     "nothing.\n\n"
     "**ρ (rank)** is Spearman's rank correlation over the valid pixels. It is invariant to "
-    "any monotone rescaling of either map, so it answers a different question from Δ: ρ asks "
+    "strictly monotone, order-preserving rescaling; clipping or quantisation can change it by "
+    "creating ties. It answers a different question from Δ: ρ asks "
     "whether the two maps agree on the ordering of every pixel, Δ asks whether they agree on "
     "which pixels make the top of the list. High ρ with high Δ is informative and not a "
     "contradiction: it says the two maps rank the surface almost identically and still "
@@ -1257,9 +1267,9 @@ HEADER_NOTE = (
 def _chance_block(floors: Sequence[SegmentFloor], qs: Sequence[float]) -> list[str]:
     """The chance level for each q, once per report.
 
-    Deltas at different q are not commensurable. The expected IoU of two independent
-    selections of the same size is q/(2-q), so it grows with q, and a Δ has to be read
-    against the chance level of its own q instead of against zero. The values come from
+    Deltas at different q are not commensurable. The expected IoU of two iid independent
+    selections of the same size is q/(2-q), so it grows with q. This is a descriptive
+    reference, not a significance threshold or normalization. The values come from
     `metrics.chance_iou`, carried in the record: this renderer does not recompute the formula.
     """
     merged: dict[float, float] = {}
@@ -1278,10 +1288,11 @@ def _chance_block(floors: Sequence[SegmentFloor], qs: Sequence[float]) -> list[s
         f"{_qlabel(q)}: IoU {merged[q]:.3f}, Δ {1.0 - merged[q]:.3f}" for q in order
     ]
     return [
-        "**Chance level per q** (two independent selections of k pixels, expected IoU "
-        "q/(2-q)): " + "; ".join(parts) + ". The floor of the metric grows with q, so a Δ is "
-        "read against the chance level of its own q and never against zero. Δ values at "
-        "different q are not commensurable with each other."
+        "**Independent-selection reference per q** (two iid selections of k pixels, expected "
+        "IoU q/(2-q)): " + "; ".join(parts) + ". Δ values at different q are not "
+        "commensurable: this baseline is a reading aid, not a significance threshold or a "
+        "normalization. Spatially clustered maps need an empirical null; read each anomaly "
+        "only at its own q."
     ]
 
 
@@ -1564,8 +1575,9 @@ def to_dict(floors: Sequence[SegmentFloor]) -> dict[str, Any]:
             "Every delta carries a 'tie' object with the exact interval it can take over all "
             "admissible tie-breaks. A delta whose tie.wide is true is an interval, not a "
             "point. A delta whose tie.degenerate is true says nothing about placement. "
-            "Compare a delta against chance_delta at the same q, never against zero, and "
-            "never against a delta at a different q."
+            "chance_delta is an iid reading baseline, not a significance threshold or a "
+            "normalization across q. Compare deltas only within the same q; structured maps "
+            "need an empirical null."
         ),
         "segments": [_segment_json(f) for f in floors],
     }

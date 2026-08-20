@@ -191,7 +191,11 @@ class CensusReport:
 
 @dataclass(frozen=True)
 class PairStats:
-    """The retained pairs and, above all, the excluded ones and why."""
+    """The retained pairs and, above all, the excluded ones and why.
+
+    `n_excluded_raster` is retained as a compatibility name; it counts every mismatch in the
+    full filename comparison contract used by `comparable`, not only voxel size or level.
+    """
 
     pairs: list[Pair]
     by_kind: dict[str, int]
@@ -306,36 +310,40 @@ def samples_in_corpus() -> list[str]:
 def _ink_keys_for_sample(sample: str) -> tuple[list[tuple[str, int]], int]:
     """All keys under a sample's `ink-detection/` directories, and how many it found.
 
-    First tries `<sample>/segments/<candidate>/ink-detection/`. If a candidate has no
-    predictions, it looks one level lower: the corpus contains intermediate containers
-    (`segments/raw/<segment>/`). It does NOT descend beyond that level.
+    The corpus contains both direct segments and intermediate containers such as
+    `segments/raw/<segment>/`. Empty candidates are therefore traversed breadth-first until
+    an ink directory is found. Known artifact directories are leaves, and a `seen` set makes
+    malformed/self-referential listings harmless.
     """
-    candidates = cache.list_prefixes(f"{sample}/{SEGMENTS_DIR}/")
     keys: list[tuple[str, int]] = []
     n_dirs = 0
-    empty: list[str] = []
+    frontier = cache.list_prefixes(f"{sample}/{SEGMENTS_DIR}/")
+    seen: set[str] = set()
 
     with ThreadPoolExecutor(MAX_WORKERS) as pool:
-        for cand, found in zip(
-            candidates, pool.map(lambda c: cache.list_keys(f"{c}{INK_DIR}/"), candidates)
-        ):
-            if found:
-                keys.extend(found)
-                n_dirs += 1
-            else:
-                empty.append(cand)
+        while frontier:
+            current = sorted({p for p in frontier if p not in seen})
+            if not current:
+                break
+            seen.update(current)
 
-        nested: list[str] = []
-        for cand, children in zip(empty, pool.map(cache.list_prefixes, empty)):
-            for child in children:
-                if child.rstrip("/").rsplit("/", 1)[-1] in ARTIFACT_DIRS:
-                    continue
-                nested.append(child)
+            empty: list[str] = []
+            found_by_candidate = pool.map(
+                lambda c: cache.list_keys(f"{c}{INK_DIR}/"), current
+            )
+            for candidate, found in zip(current, found_by_candidate):
+                if found:
+                    keys.extend(found)
+                    n_dirs += 1
+                else:
+                    empty.append(candidate)
 
-        for found in pool.map(lambda c: cache.list_keys(f"{c}{INK_DIR}/"), nested):
-            if found:
-                keys.extend(found)
-                n_dirs += 1
+            frontier = []
+            for children in pool.map(cache.list_prefixes, empty):
+                for child in children:
+                    name = child.rstrip("/").rsplit("/", 1)[-1]
+                    if name not in ARTIFACT_DIRS and child not in seen:
+                        frontier.append(child)
 
     return keys, n_dirs
 
@@ -446,13 +454,28 @@ def census_stats() -> dict[str, object]:
 
 
 def comparable(a: Prediction, b: Prediction) -> bool:
-    """True if both maps live on the same raster: same voxel and same level.
+    """True if the filename records the same pixel-wise comparison contract.
 
-    Does NOT check TIFF shapes or mesh alignment: it only says that comparing them pixel for
-    pixel makes sense. An unknown level (None) is considered equal only to another unknown
-    level, because two names that omit the level omit the same information.
+    Besides voxel size and pyramid level, tile, stride, beam energy and source distance must
+    match. A change in any of them can alter sampling or inference independently of the model
+    or volume named by the pair. Unknown values compare equal only to unknown values.
+
+    This still does NOT check TIFF shapes, decoded masks, mesh alignment or preprocessing that
+    is absent from the filename; those require opening the artifacts or richer provenance.
     """
-    return abs(a.voxel_um - b.voxel_um) < 1e-9 and a.level == b.level
+    def same_number(x: float | None, y: float | None) -> bool:
+        if x is None or y is None:
+            return x is y
+        return abs(x - y) < 1e-9
+
+    return (
+        same_number(a.voxel_um, b.voxel_um)
+        and getattr(a, "level", None) == getattr(b, "level", None)
+        and getattr(a, "tile", None) == getattr(b, "tile", None)
+        and getattr(a, "stride", None) == getattr(b, "stride", None)
+        and same_number(getattr(a, "kev", None), getattr(b, "kev", None))
+        and same_number(getattr(a, "dist_m", None), getattr(b, "dist_m", None))
+    )
 
 
 def _kind(a: Prediction, b: Prediction) -> str | None:
@@ -531,8 +554,9 @@ def pair_stats(preds: list[Prediction]) -> PairStats:
 def pairs(preds: list[Prediction]) -> list[Pair]:
     """All comparable pairs, grouped by segment. Excludes kind='both'.
 
-    Does NOT include pairs on different rasters (different voxel or pyramid level): those
-    maps have different steps, and overlaying them pixel for pixel would measure resampling,
-    not the floor. `pair_stats` reports how many were excluded.
+    Does NOT include pairs with different raster or inference metadata (voxel, level, tile,
+    stride, energy or source distance): those maps changed more than the named volume/model,
+    so they cannot isolate a derivation or checkpoint effect. `pair_stats` reports how many
+    were excluded under its backwards-compatible `n_excluded_raster` field.
     """
     return pair_stats(preds).pairs

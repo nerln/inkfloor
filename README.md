@@ -1,10 +1,11 @@
 # inkfloor
 
-inkfloor measures how far apart two published ink predictions are when the only thing that
-changed between them is which derivation of the same scan they were run on. It puts that
-distance next to the distance between two different model checkpoints on the same
-derivation. The first number is the **floor**: the disagreement you get without touching the
-model. The second is the **anchor**: the disagreement the community already reads as real.
+inkfloor measures how far apart two published ink predictions are when the recorded difference
+is which derivation of the same scan they were run on. It puts that distance next to the
+distance between named model pairs on the same derivation. The first number is labelled the
+**floor**; it is an observed disagreement, not a statistical lower bound. The second is the
+**anchor**; it is context from those specific model pairs, not an estimate of arbitrary
+checkpoint changes.
 
 It reads the public bucket over anonymous HTTP. No credentials, no GPU, no torch, no zarr
 library, no local copy of the corpus.
@@ -58,11 +59,12 @@ segments that carry a floor pair:
   PHerc0172  20251107110950-w064_20251107110950052_flatboi  (4 predictions)
 ```
 
-One segment in the published corpus carries two derivations of the same scan. inkfloor does
-not manufacture more data: it enumerates what exists, and today what exists supports n = 1
-for the floor and n = 56 for the anchor. Every future segment published with a second
-derivation raises that count with no change to this tool, and the census is the place to look
-before quoting a corpus-wide claim.
+In the bucket snapshot of 8 August 2026, one segment carries two derivations of the same scan.
+inkfloor does not manufacture more data: that snapshot supports n = 1 segment for the floor
+and 56 segment-level anchor pairs. Of those anchors, 54 repeat one model pair over PHerc0172
+and two repeat another pair over PHerc0500P2; they are not 56 independent checkpoint changes.
+The census follows paginated and nested layouts, but only files whose names expose the full
+comparison contract can raise these counts. Run it again before quoting a current corpus claim.
 
 ### The claim this tool does not make
 
@@ -78,19 +80,23 @@ Nothing here has to be taken on trust. The cheapest independent check of the cor
 costs 71 MB and one command:
 
 ```
-pip install git+https://github.com/nerln/inkfloor
+git clone https://github.com/nerln/inkfloor.git
+cd inkfloor
+python -m pip install .
 inkfloor corpus --kind model --samples PHerc0500P2 --limit 1 --dry-run   # prints the bytes first
 inkfloor corpus --kind model --samples PHerc0500P2 --limit 1
 ```
 
 No credentials, no GPU, no account: the bucket is read anonymously over HTTP. Every command
 announces its download before the first byte moves and refuses to start without `--yes` if you
-would rather not.
+would rather not. Record `git rev-parse HEAD` with any quoted result: an unpinned install from a
+moving branch is not a reproducible scientific reference.
 
 The full corpus run behind [results/anchors-2026-08-08.md](results/anchors-2026-08-08.md) is
 `inkfloor corpus --kind model`, which fetches 5.3 GB and measures 56 pairs across 55 segments.
 Its output is committed, so the table can be checked against the JSON without downloading
-anything at all.
+anything at all; [results/anchors-2026-08-08.sha256](results/anchors-2026-08-08.sha256)
+pins both committed files.
 
 ## Install
 
@@ -107,8 +113,11 @@ The cache can be moved anywhere:
 export INKFLOOR_CACHE=/Volumes/BigDisk/inkfloor-cache
 ```
 
-Everything downloaded lands there under the same key path as on S3 and is never fetched
-twice.
+Everything downloaded lands there under the same key path as on S3. Prediction cache hits are
+accepted only when their byte length still matches the S3 listing; `cache.fetch` also accepts a
+SHA-256 digest when a caller has a content manifest. Historical result files below pin their
+own bytes, but the August bucket snapshot predates an upstream object-checksum manifest, so it
+cannot prove that S3 objects of the same size were never replaced.
 
 ## Using it
 
@@ -221,17 +230,17 @@ is the real output of that run, shown as it renders (the command writes the same
 
 Δ@q = 1 - IoU between the top-q% of two ink predictions, at a matched positive budget: the same number of positives k on each side, so a difference in calibration is not read as a difference in placement. 0 means the two maps put ink in the same pixels, 1 means they are disjoint.
 
-**Floor** = same model, two derivations of the same scan. **Anchor** = same derivation, two models. The anchor is the difference the community already treats as real, so it is the scale the floor is read against. A floor near its anchor is a measurement, not an explanation: inkfloor does not establish a cause.
+**Floor** = same model, two derivations of the same scan. Here “floor” is a label for an observed disagreement, not a statistical lower bound. **Anchor** = same derivation, two named models. It is context from those particular pairs, not a population estimate of checkpoint change. A floor near its anchor is a measurement, not an explanation: inkfloor does not establish a cause.
 
 **How to read a Δ cell.** Each one is `Δ [low, high]`, where the bracket is the exact interval the Δ can take over every admissible tie-break, mirrored onto Δ from the IoU bounds that `metrics.tie_bounds` returns. Published maps are 8 bit, so the top-q% cut usually lands inside a plateau of pixels that share one value, and which members of the plateau get taken is arbitrary. A narrow bracket means the Δ is a fact about the data. `!` marks a band wider than 0.050, which has to be read as an interval. `!!` marks the degenerate case: the whole budget came from one plateau on both sides, so the Δ is an artifact of a shared saturated tail and not a measurement of placement. That case can print a Δ of 0.000, which looks like the best possible result and is worth nothing.
 
-**ρ (rank)** is Spearman's rank correlation over the valid pixels. It is invariant to any monotone rescaling of either map, so it answers a different question from Δ: ρ asks whether the two maps agree on the ordering of every pixel, Δ asks whether they agree on which pixels make the top of the list. High ρ with high Δ is informative and not a contradiction: it says the two maps rank the surface almost identically and still disagree about where the ink is.
+**ρ (rank)** is Spearman's rank correlation over the valid pixels. It is invariant to a strictly monotone, order-preserving rescaling. Clipping and quantisation are not strictly monotone: they create ties that can change ρ. The statistic therefore answers a different question from Δ: ρ asks how similarly the two maps rank pixels, Δ asks whether they agree on which pixels make the top of the list. High ρ with high Δ is informative and not a contradiction.
 
 Segments measured: 1 (1 with both a floor pair and an anchor pair)
 
 q grid: 1%, 5%, 20%
 
-**Chance level per q** (two independent selections of k pixels, expected IoU q/(2-q)): 1%: IoU 0.005, Δ 0.995; 5%: IoU 0.026, Δ 0.974; 20%: IoU 0.111, Δ 0.889. The floor of the metric grows with q, so a Δ is read against the chance level of its own q and never against zero. Δ values at different q are not commensurable with each other.
+**Independent-selection reference per q** (two iid selections of k pixels, expected IoU q/(2-q)): 1%: IoU 0.005, Δ 0.995; 5%: IoU 0.026, Δ 0.974; 20%: IoU 0.111, Δ 0.889. This is a reading aid, not a significance threshold or a normalisation: spatially clustered maps violate the iid model. Compare an anomaly with its own q; ratios to this reference do not make different q budgets commensurable.
 
 | segment | floor Δ@5% (median) | anchor Δ@5% (median) | floor / anchor | mesh identical | pairs floor / anchor |
 | --- | --- | --- | --- | --- | --- |
@@ -263,7 +272,7 @@ q grid: 1%, 5%, 20%
 ### Confounder checks
 
 - mesh: **identical**, shape (671, 747) vs (671, 747), max abs diff x=0.000000 y=0.000000 z=0.000000 (coordinates bit-identical on x, y, z (671x747); meta.json differs on area_vx2, scale, uuid; [...], full note in the JSON report)
-- intensity: A = 0.6153*B + 104.33 (r = 0.99988, n = 10,440,027 voxels), median 154.0 vs 80.0, at or above the clip ceiling 200: 2.26% vs 0.16%, best z offset 0, chunks (125,26,39), (123,23,28), (130,9,37), (155,10,40), (85,31,13) (5/5 chunks accepted in 10 tries (seed=0, min_nonzero=0.5); rejected: 3 absent in A, 2 present in A but absent in B, 0 too empty; scansione [...], full note in the JSON report)
+- intensity: A = 0.6153*B + 104.33 (r = 0.99988, n = 10,440,027 voxels), median 154.0 vs 80.0, at or above the clip ceiling 200 among sampled common-positive voxels: 2.26% vs 0.16%, best z offset 0, chunks (125,26,39), (123,23,28), (130,9,37), (155,10,40), (85,31,13) (5/5 chunks accepted in 10 tries (seed=0, min_nonzero=0.5); rejected: 3 absent in A, 2 present in A but absent in B, 0 too empty; dense scan [...], full note in the JSON report)
 
 ### Null controls
 
@@ -315,13 +324,13 @@ levels. Threshold both at 128 and one yields far more positives than the other, 
 the measured difference is the remap. That is a calibration difference reported as a
 localisation difference.
 
-Matching the budget removes the part of the difference that any monotone rescaling could
+Matching the budget removes the part of the difference that any strictly monotone rescaling could
 explain, and what is left is placement. Two consequences:
 
 - the pipeline clips at an absolute 200 with no per-volume normalisation, so a threshold
   chosen near the top of the range inherits that clip. `clip_frac_a` and `clip_frac_b` say how
-  much of each volume sits at the ceiling: on this segment 2.26% against 0.16%, which is the
-  same asymmetry the affine fit describes.
+  much of the sampled common-positive parent-volume voxels sit at the ceiling: on this segment
+  2.26% against 0.16%. These are conditional sample statistics, not whole-volume fractions.
 - matching the budget introduces a cost of its own, which is the subject of the next section.
 
 ### Why every Δ carries an interval
@@ -384,10 +393,10 @@ top-k sets are spatially clustered.
 
 ### ρ: the milder story next to Δ
 
-`metrics.spearman` is a column in both tables. It is invariant to any monotone rescaling of
-either map, so it answers a different question: ρ asks whether the two maps agree on the
-ordering of every valid pixel, Δ asks whether they agree on which pixels make the top of the
-list.
+`metrics.spearman` is a column in both tables. It is invariant to a strictly monotone,
+order-preserving rescaling. Clipping and quantisation create ties and can change it. It answers
+a different question: ρ asks how similarly the maps rank valid pixels, while Δ asks whether
+they agree on which pixels make the top of the list.
 
 A divergence between the two is information rather than an error. On this segment the floor
 pairs give ρ 0.745 and 0.452 while the anchor pairs give 0.522 and 0.414, so the two
@@ -415,13 +424,13 @@ answer. Anything other than 1.000 means the measurement is unusable, and the rep
 `FAIL` rather than printing a number and moving on. It does not prove that tie-breaking is
 insensitive to a small change in the input, which is what `tie_bounds` is for.
 
-The `shift` control sets the scale. If a rigid 64 px translation of one map agrees with the
-original as much as the two derivations agree with each other, a Δ of 0.6 says nothing about
-derivations. The report marks that case `SUSPECT`. On the example segment the shift gives
-IoU 0.159 against a floor IoU of 0.380 and 0.287, so the pair difference sits well inside the
-range the control leaves open. `metrics.best_shift_iou(a, b, valid, q)` goes further and
-searches translations exhaustively within a radius, which answers whether a pair difference
-is a plain misalignment.
+The reported `shift_64px` value is a self-shift heuristic: it asks how quickly one map loses
+self-overlap under one fixed translation. It is neither a null distribution nor a direct
+pair-registration test. The report marks `SUSPECT` if that self-shift agrees with the original
+as much as the measured pair. On the example segment the shift gives IoU 0.159 against floor
+IoUs of 0.380 and 0.287. The separate API `metrics.best_shift_iou(a, b, valid, q)` can search
+translations of the pair within a requested radius; the standard report does not run it, and
+even its best value diagnoses translational compatibility rather than cause.
 
 ## The confounders it checks
 
@@ -433,11 +442,12 @@ meaningless. Two checks run per segment:
   the two mesh sets are 3.5 MB and 5.7 MB on the bucket and decode to identical `float32`
   arrays of shape `(671, 747)`. A byte comparison would have reported a difference that does
   not exist.
-- **intensity**: `geometry.fit_intensity` samples homologous chunks from both surface volumes,
+- **intensity**: `geometry.fit_intensity` samples homologous chunks from both parent 3-D scans,
   fits `A = slope*B + intercept` and reports `r`, both medians, the fraction of voxels at or
   above the clip ceiling of 200, the z offset that maximised the correlation, and which chunks
-  it used. A low `r` is grounds to discard the fit, which is why `r` is in the report instead
-  of behind it.
+  it used. Medians and clip fractions are conditional on accepted common-positive sampled
+  chunks; they are not surface-ROI or whole-volume estimates. A low `r` is grounds to discard
+  the fit, which is why `r` is in the report instead of behind it.
 
 ## What inkfloor does not do
 
@@ -453,9 +463,10 @@ meaningless. Two checks run per segment:
   which checkpoint is better.
 - **It does not make n larger.** It reports the n the corpus has. Today that is one segment
   with a floor pair.
-- **It does not verify the bucket.** Names, sizes and contents are taken as published. The
-  name parser refuses what it does not recognise and counts the refusals, which is as far as
-  its scepticism goes.
+- **It cannot authenticate the historical bucket snapshot.** Prediction downloads are checked
+  against the listed object size, and callers with a manifest can require SHA-256. The August
+  run did not have upstream content hashes, so a same-size replacement cannot be detected
+  retrospectively. The parser refuses and counts names it does not recognise.
 - **It does not pick a tie-break for you.** A reported Δ is one admissible tie-break out of
   many. The interval next to it is the range of all of them, and a Δ whose band is wide is not
   a result, whatever the point value looks like. There is no flag to turn those columns off:
@@ -470,8 +481,9 @@ meaningless. Two checks run per segment:
 - All 424 predictions published across the bucket are 92.6 GB. A `corpus` run fetches only
   the segments that carry a volume pair, and the exact total is printed before the first
   fetch, so the number is never a surprise.
-- Partial reads (the zarr chunks of the intensity fit) go over HTTP Range and are not cached.
-  Everything else is cached under its S3 key and reused.
+- Partial reads (the zarr chunks of the intensity fit) go over HTTP Range and are not cached;
+  retries and neighbouring chunks can therefore add traffic beyond the nominal plan. Complete
+  prediction files are cached under their S3 key and reused only when their listed size matches.
 - Every map of a segment is held in memory at once to build the common valid mask. Budget
   roughly one byte of RSS per pixel per map. The example segment peaked at 3.0 GB.
 - The tie bands and the rank correlation cost more compute than the Deltas themselves. Adding

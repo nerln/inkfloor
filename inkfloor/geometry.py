@@ -372,7 +372,9 @@ class IntensityFit:
     n_voxel: int
     median_a: float
     median_b: float
-    clip_frac_a: float    # fraction of voxels >= 200, the pipeline's clipping ceiling
+    # Fractions among common-positive voxels in the accepted sample chunks, not whole-volume
+    # population estimates.
+    clip_frac_a: float
     clip_frac_b: float
     chunks_used: list[tuple[int, int, int]]
     # Fields appended at the end, all with defaults: calls written against the contract's
@@ -406,6 +408,11 @@ def fit_intensity(
     where fewer than a `min_nonzero` fraction of either volume's voxels are > 0, and reports
     in `chunks_used` exactly those on which it measured. Changing `seed` changes the chunks
     and must not change the estimate: that is the check.
+
+    The chunks come from the parent 3-D scan volumes. They are not constrained to the mesh or
+    evaluated segment ROI, so this is a scan-level radiometric check, not proof of the values
+    seen by a particular surface prediction. Medians and clip fractions are conditional on
+    voxels that are positive in both accepted chunks.
 
     This is NOT robust regression and does NOT exclude voxels at the clipping ceiling: the
     estimate is ordinary least squares of A on B over voxels where both are > 0, and the

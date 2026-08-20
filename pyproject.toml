@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "inkfloor"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Measure the reproducibility floor of the Vesuvius Challenge ink detection pipeline"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,20 +22,27 @@ classifiers = [
 # No torch, no zarr, no boto3. The tool has to run on a laptop with no GPU and no
 # credentials: the bucket is public and every request is anonymous.
 dependencies = [
-  "numpy>=1.24",
-  "tifffile>=2023.7.10",
-  "numcodecs>=0.11",
-  "imagecodecs>=2023.1.23",
+  "numpy>=1.24,<3",
+  "tifffile>=2023.7.10,<2027",
+  "numcodecs>=0.11,<1",
+  "imagecodecs>=2023.1.23,<2027",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4"]
+dev = ["pytest>=7.4,<10"]
 
 [project.scripts]
 inkfloor = "inkfloor.cli:main"
 
 [tool.setuptools]
 packages = ["inkfloor"]
+
+[tool.setuptools.dynamic]
+version = { attr = "inkfloor.__version__" }
+
+[project.urls]
+Repository = "https://github.com/nerln/inkfloor"
+Issues = "https://github.com/nerln/inkfloor/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

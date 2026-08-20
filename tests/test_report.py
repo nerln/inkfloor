@@ -666,7 +666,7 @@ def test_chance_level_is_reported_once_per_report_for_every_q():
     assert "5%: IoU 0.026, Δ 0.974" in md
     assert "20%: IoU 0.111, Δ 0.889" in md
     assert "not commensurable" in md
-    assert md.count("Chance level per q") == 1  # per report, not per row
+    assert md.count("Independent-selection reference per q") == 1  # per report, not per row
 
 
 def test_chance_level_absent_is_stated_and_not_recomputed():
@@ -881,7 +881,10 @@ def test_segment_plan_counts_what_is_already_in_cache(tmp_path, monkeypatch):
     preds = [pred(VOL_A, MODEL_1), pred(VOL_B, MODEL_1)]
     local = tmp_path / preds[0].key
     local.parent.mkdir(parents=True)
-    local.write_bytes(b"x")
+    # A cache entry counts only when its size matches the S3 listing. Sparse truncate keeps
+    # the test cheap while representing the 42 MiB object faithfully.
+    with local.open("wb") as stream:
+        stream.truncate(preds[0].size_bytes)
     plan = report.plan_segment(
         "PHerc0172", SEG, preds=preds, geometry_checks=False, allow_listing=False
     )

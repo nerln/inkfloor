@@ -1,0 +1,5 @@
+# Runtime constraints mirror pyproject.toml for users of requirements-based tooling.
+numpy>=1.24,<3
+tifffile>=2023.7.10,<2027
+numcodecs>=0.11,<1
+imagecodecs>=2023.1.23,<2027

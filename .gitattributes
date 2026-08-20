@@ -1,0 +1,3 @@
+results/*.json -text
+results/*.md text eol=lf
+results/*.sha256 text eol=lf

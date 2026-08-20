@@ -253,12 +253,12 @@ def delta_at_q(a: np.ndarray, b: np.ndarray, valid: np.ndarray, q: float) -> Del
 def spearman(a: np.ndarray, b: np.ndarray, valid: np.ndarray) -> float:
     """Spearman rank correlation between a and b over valid pixels.
 
-    Invariant under any monotonic compression of the values, it therefore tells a milder
-    story than IoU: two maps that order the pixels the same way produce 1 even if their
-    calibrations are extremely far apart. Both should be reported because they answer
-    different questions: Spearman asks "is the order the same?", top-q% IoU asks "are the
-    hottest pixels the same pixels?", and on nearly rank-equivalent maps with different
-    tails, the former stays high while the latter collapses.
+    Invariant under a strictly monotonic, order-preserving transformation of the values, it
+    therefore tells a milder story than IoU: two maps that order the pixels the same way
+    produce 1 even if their calibrations are extremely far apart. Clipping or quantisation is
+    only non-decreasing, not strictly monotonic: it creates ties and can change Spearman.
+    Both metrics should be reported because they answer different questions: Spearman asks
+    "is the order the same?", top-q% IoU asks "are the hottest pixels the same pixels?".
 
     Ties are handled with midranks, which is the correct adjustment and matters greatly
     here: with uint8 there are 256 levels for millions of pixels, so tie groups are enormous.

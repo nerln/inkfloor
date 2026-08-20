@@ -7,6 +7,8 @@ requests are anonymous.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -19,6 +21,7 @@ from pathlib import Path
 BUCKET = "vesuvius-challenge-open-data"
 HOST = f"https://{BUCKET}.s3.amazonaws.com"
 NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
+
 
 def _default_cache_root() -> Path:
     """Where to keep downloaded predictions when nobody says otherwise.
@@ -52,29 +55,87 @@ class FetchError(RuntimeError):
     """The bucket responded in a way that we cannot use."""
 
 
+class CacheIntegrityError(FetchError):
+    """A cached or downloaded object does not match its declared identity."""
+
+
 def _local_path(key: str) -> Path:
     return CACHE_ROOT / key
 
 
-def fetch(key: str) -> Path:
+def _verify_file(
+    path: Path,
+    key: str,
+    *,
+    expected_size: int | None = None,
+    sha256: str | None = None,
+) -> None:
+    """Raise when a local object disagrees with supplied immutable metadata."""
+    size = path.stat().st_size
+    if expected_size is not None and size != expected_size:
+        raise CacheIntegrityError(
+            f"cached size mismatch for {key}: expected {expected_size} bytes, found {size}; "
+            f"remove {path} and retry"
+        )
+    if sha256 is None:
+        return
+    expected = sha256.lower()
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise ValueError("sha256 must be a 64-character hexadecimal digest")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1 << 20):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if not hmac.compare_digest(actual, expected):
+        raise CacheIntegrityError(
+            f"cached SHA-256 mismatch for {key}: expected {expected}, found {actual}; "
+            f"remove {path} and retry"
+        )
+
+
+def fetch(
+    key: str,
+    *,
+    expected_size: int | None = None,
+    sha256: str | None = None,
+) -> Path:
     """Download `key` into the cache and return the local path.
 
-    It does not redownload it if already present. It does not validate content: a file
-    truncated by a previous run stays truncated. Use `fetch(key, verify=True)` when needed;
-    for now, the cache is append-only and single-process.
+    Existing files are reused only after checking any supplied object size and SHA-256.
+    Downloads are always checked against their HTTP Content-Length, when present, as well as
+    the supplied metadata. A mismatch is reported without overwriting the suspect cache file.
+
+    `expected_size` normally comes from the same S3 listing that discovered a prediction.
+    A published result manifest can additionally pass `sha256` to pin content even if an
+    object is later replaced by another object of the same size.
     """
+    if sha256 is not None:
+        expected = sha256.lower()
+        if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+            raise ValueError("sha256 must be a 64-character hexadecimal digest")
     dst = _local_path(key)
     if dst.exists() and dst.stat().st_size > 0:
+        _verify_file(dst, key, expected_size=expected_size, sha256=sha256)
         return dst
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_suffix(dst.suffix + ".part")
     try:
         with urllib.request.urlopen(f"{HOST}/{key}", timeout=TIMEOUT) as r, open(tmp, "wb") as f:
+            response_size = r.headers.get("Content-Length")
             while chunk := r.read(1 << 20):
                 f.write(chunk)
-    except urllib.error.HTTPError as e:
+        declared_size = expected_size
+        if declared_size is None and response_size is not None:
+            declared_size = int(response_size)
+        _verify_file(tmp, key, expected_size=declared_size, sha256=sha256)
+    except (urllib.error.HTTPError, urllib.error.URLError, CacheIntegrityError) as e:
         tmp.unlink(missing_ok=True)
-        raise FetchError(f"HTTP {e.code} su {key}") from e
+        if isinstance(e, CacheIntegrityError):
+            raise
+        if isinstance(e, urllib.error.HTTPError):
+            raise FetchError(f"HTTP {e.code} on {key}") from e
+        raise FetchError(f"network error on {key}: {e.reason}") from e
     tmp.replace(dst)
     return dst
 
@@ -88,7 +149,9 @@ def get_bytes(key: str, start: int | None = None, end: int | None = None) -> byt
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             return r.read()
     except urllib.error.HTTPError as e:
-        raise FetchError(f"HTTP {e.code} su {key}") from e
+        raise FetchError(f"HTTP {e.code} on {key}") from e
+    except urllib.error.URLError as e:
+        raise FetchError(f"network error on {key}: {e.reason}") from e
 
 
 def list_keys(prefix: str, suffix: str | None = None) -> list[tuple[str, int]]:
@@ -109,17 +172,35 @@ def list_keys(prefix: str, suffix: str | None = None) -> list[tuple[str, int]]:
             size = int(c.find(NS + "Size").text)
             if suffix is None or key.endswith(suffix):
                 out.append((key, size))
-        nxt = root.find(NS + "NextContinuationToken")
-        if nxt is None:
+        nxt = root.findtext(NS + "NextContinuationToken")
+        truncated = root.findtext(NS + "IsTruncated", "false").lower() == "true"
+        if not truncated:
             return out
-        token = nxt.text
+        if not nxt or nxt == token:
+            raise FetchError(f"truncated listing for {prefix!r} did not advance")
+        token = nxt
 
 
 def list_prefixes(prefix: str) -> list[str]:
-    """The immediate "subdirectories" under `prefix`."""
-    url = f"{HOST}/?list-type=2&prefix={urllib.parse.quote(prefix)}&delimiter=/&max-keys=1000"
-    root = ET.fromstring(_raw(url))
-    return [p.find(NS + "Prefix").text for p in root.findall(NS + "CommonPrefixes")]
+    """The immediate "subdirectories" under `prefix`, following all pages."""
+    out: list[str] = []
+    token: str | None = None
+    while True:
+        url = f"{HOST}/?list-type=2&prefix={urllib.parse.quote(prefix)}&delimiter=/&max-keys=1000"
+        if token:
+            url += "&continuation-token=" + urllib.parse.quote(token)
+        root = ET.fromstring(_raw(url))
+        for item in root.findall(NS + "CommonPrefixes"):
+            value = item.findtext(NS + "Prefix")
+            if value is not None:
+                out.append(value)
+        nxt = root.findtext(NS + "NextContinuationToken")
+        truncated = root.findtext(NS + "IsTruncated", "false").lower() == "true"
+        if not truncated:
+            return out
+        if not nxt or nxt == token:
+            raise FetchError(f"truncated prefix listing for {prefix!r} did not advance")
+        token = nxt
 
 
 def get_json(key: str) -> dict:
@@ -131,7 +212,9 @@ def _raw(url: str) -> bytes:
         with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
             return r.read()
     except urllib.error.HTTPError as e:
-        raise FetchError(f"HTTP {e.code} su {url}") from e
+        raise FetchError(f"HTTP {e.code} on {url}") from e
+    except urllib.error.URLError as e:
+        raise FetchError(f"network error on {url}: {e.reason}") from e
 
 
 def cache_size_bytes() -> int:
